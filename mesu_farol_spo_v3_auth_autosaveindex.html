@@ -52,13 +52,14 @@
     .theme-item{display:flex;align-items:center;gap:8px;border:1px solid #e5e7eb;border-radius:8px;padding:6px 10px}
     .theme-item button{margin-left:auto}
     .small{font-size:12px;color:#64748b}
+    code.k{background:#f1f5f9;padding:2px 6px;border-radius:6px}
   </style>
 </head>
 <body>
 <header>
   <h1>MESU – Farol Executivo</h1>
   <div class="meta">
-    Persistência: <b>Excel online via Power Automate</b> (Flow “Anyone”).<br/>
+    Persistência: <b>Excel online via Power Automate</b> (gatilho HTTP – Anyone).<br/>
     Auto-save: <b>ativo</b> (salva ~0,8s após qualquer alteração).
   </div>
 </header>
@@ -86,6 +87,11 @@
 
   <div class="grid">
     <table class="table" id="dashboard"></table>
+  </div>
+
+  <div class="small" style="margin-top:10px">
+    Dica: se der erro, abra o <b>Run history</b> do Flow e veja se chegou <code class="k">action</code>,
+    <code class="k">themes</code> e <code class="k">rows</code>.
   </div>
 </div>
 
@@ -143,7 +149,7 @@
         <button class="btn" id="cancelBtn">Fechar</button>
         <button class="btn primary" id="saveBtn">Salvar agora</button>
         <button class="btn danger" id="deleteBtn">Apagar anotações</button>
-        <span class="small">Auto-save está ligado. O botão “Salvar agora” força envio imediato.</span>
+        <span class="small">Auto-save está ligado. “Salvar agora” força envio imediato.</span>
       </div>
     </section>
   </div>
@@ -161,21 +167,21 @@
       <div class="btns" style="margin-top:12px">
         <button class="btn" id="closeThemesBtn">Fechar</button>
       </div>
-      <div class="small">⚠️ Alterar temas muda o “banco”. Mantemos histórico pelo campo Key.</div>
+      <div class="small">⚠️ Alterar temas atualiza a tabela de temas no Excel. Cada célula é indexada por <b>Key</b>.</div>
     </section>
   </div>
 </div>
 
 <script>
   // =========================
-  // 1) CONFIGURAÇÕES
+  // 1) CONFIGURAÇÕES (AJUSTE APENAS O FLOW.url)
   // =========================
   const DATA = {
     units: ["AutoBAn","RodoAnel","Sorocabana","SPVias","RioSP","ViaRio","ViaLagos","Minas_sp","PRVias","Pantanal","ViaSul","ViaCosteira"],
     themes:["Segurança","Contratos","Qualidade","Performance","Mobilização","Temas Criticos","Pessoas"]
   };
 
-  // ✅ URL do seu Flow (gatilho HTTP “Anyone”)
+  // ✅ SEU LINK DO FLOW (ANYONE)
   const FLOW = {
     url: "https://defaultd233d58a997343a7af696763630548.a0.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/13b978e86ff94d2ea05e1e54b2bb830f/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=cti9BiNiYMvDVF54-Dflx3ApyAaHb-sjGeezxIVK9Po"
   };
@@ -223,14 +229,29 @@
     };
   }
 
-  function buildAllRowsObjects(data){
-    const themes = data.themes || [];
-    const rows = [];
-    themes.forEach(t => DATA.units.forEach(u => {
-      const s = normalizeState(data.items[keyFor(u,t)]);
-      rows.push(toRow(u, t, s));
-    }));
-    return rows;
+  // ✅ compatível com o seu Power Automate:
+  // Run script recebe:
+  // - action        = triggerBody()?['action']
+  // - themesJson    = string(triggerBody()?['themes'])
+  // - rowsJson      = string(triggerBody()?['rows'])
+  function packForFlow(action, themesArray, rowsArray){
+    return { action, themes: themesArray || [], rows: rowsArray || [] };
+  }
+
+  function parsePossiblyStringArray(v){
+    if (Array.isArray(v)) return v;
+    if (typeof v === "string" && v.trim()){
+      try{ const j = JSON.parse(v); return Array.isArray(j) ? j : []; }catch{ return []; }
+    }
+    return [];
+  }
+
+  function parsePossiblyStringRows(v){
+    if (Array.isArray(v)) return v;
+    if (typeof v === "string" && v.trim()){
+      try{ const j = JSON.parse(v); return Array.isArray(j) ? j : []; }catch{ return []; }
+    }
+    return [];
   }
 
   // =========================
@@ -290,126 +311,123 @@
       return json;
     }
 
-    async function bulkUpsert(data){
-      const themes = data.themes || [];
-      const rowsObj = buildAllRowsObjects(data);
-
-      // ✅ enviamos dos 2 jeitos para bater com seu Flow:
-      // - triggerBody()?['themes']  (array)
-      // - triggerBody()?['rows']    (array)
-      // e também:
-      // - themesJson (string JSON)
-      // - rowsJson   (string JSON)
-      return await post({
-        action: "bulkUpsert",
-        themes: themes,
-        rows: rowsObj,
-        themesJson: JSON.stringify(themes),
-        rowsJson: JSON.stringify(rowsObj)
-      });
-    }
-
     async function loadAll(){
-      const j = await post({ action:"load" });
+      // action load
+      const j = await post(packForFlow("load", [], []));
 
-      // Seu Office Script retorna string JSON, e o Flow às vezes encapsula.
-      // Vamos aceitar:
-      // 1) { ok:true, themes:[...], rows:[...] }
-      // 2) { body:"{...json...}" } ou { result:"{...}" }
-      let data = j;
-      if (typeof j === "string") {
-        try { data = JSON.parse(j); } catch {}
-      }
-      if (data && typeof data === "object") {
-        const maybe = data.body || data.result || data.outputs;
-        if (typeof maybe === "string") {
-          try { data = JSON.parse(maybe); } catch {}
-        }
-        // se vier no formato power automate outputs do Run script
-        if (data && data.body && typeof data.body === "object") data = data.body;
-      }
+      // aceita 2 formatos:
+      // A) { themes:[...], rows:[{...},{...}] }
+      // B) { themesJson:"[...] ", rowsJson:"[...]" }  (caso o script devolva strings)
+      const themes = (Array.isArray(j.themes) && j.themes.length)
+        ? j.themes
+        : parsePossiblyStringArray(j.themesJson);
 
-      if (!data || data.ok !== true) {
-        throw new Error("Flow/Script não retornou ok:true.");
-      }
+      const rows = (Array.isArray(j.rows) && j.rows.length)
+        ? j.rows
+        : parsePossiblyStringRows(j.rowsJson);
 
-      const themes = (Array.isArray(data.themes) && data.themes.length) ? data.themes : [...DATA.themes];
+      const themesFinal = (themes && themes.length) ? themes : [...DATA.themes];
 
       const items = {};
-      themes.forEach(t => DATA.units.forEach(u => { items[keyFor(u,t)] = normalizeState(null); }));
+      themesFinal.forEach(t => DATA.units.forEach(u => items[keyFor(u,t)] = normalizeState(null)));
 
-      // rows pode vir como array de objetos
-      if (Array.isArray(data.rows)) {
-        data.rows.forEach(r => {
-          const theme = r["Tema"];
-          const unit  = r["Unidade"];
-          if(!theme || !unit) return;
-          items[keyFor(unit, theme)] = normalizeState({
-            status: (r["Status (num)"]==="" || r["Status (num)"]==null) ? null : Number(r["Status (num)"]),
-            obs: r["Observações"] || "",
-            com: r["Comentários"] || "",
-            risco: r["Risco associado"] || "",
-            indicador: r["Indicador afetado"] || "",
-            acao: r["Ação necessária"] || "",
-            responsavel: r["Responsável"] || "",
-            dataLimite: r["Data limite"] || "",
-            decisao: r["Decisão de execução"] || "",
-            resumoExec: r["Resumo executivo"] || ""
-          });
+      rows.forEach(r => {
+        const theme = r["Tema"];
+        const unit  = r["Unidade"];
+        if(!theme || !unit) return;
+
+        items[keyFor(unit, theme)] = normalizeState({
+          status: (r["Status (num)"]==="" || r["Status (num)"]==null) ? null : Number(r["Status (num)"]),
+          obs: r["Observações"] || "",
+          com: r["Comentários"] || "",
+          risco: r["Risco associado"] || "",
+          indicador: r["Indicador afetado"] || "",
+          acao: r["Ação necessária"] || "",
+          responsavel: r["Responsável"] || "",
+          dataLimite: r["Data limite"] || "",
+          decisao: r["Decisão de execução"] || "",
+          resumoExec: r["Resumo executivo"] || ""
         });
-      }
+      });
 
-      return { themes, items };
+      return { themes: themesFinal, items };
+    }
+
+    // ✅ salva 1 célula (1 row) por vez
+    async function saveOneRow(themesArray, oneRowObj){
+      return await post(packForFlow("bulkUpsert", themesArray, [oneRowObj]));
     }
 
     async function save(u,t,o){
       currentData.items[keyFor(u,t)] = normalizeState(o);
-      return await bulkUpsert(currentData);
+      const oneRow = toRow(u, t, currentData.items[keyFor(u,t)]);
+      return await saveOneRow(currentData.themes || [], oneRow);
     }
 
     async function remove(u,t){
       currentData.items[keyFor(u,t)] = normalizeState(null);
-      return await bulkUpsert(currentData);
+      const oneRow = toRow(u, t, currentData.items[keyFor(u,t)]);
+      return await saveOneRow(currentData.themes || [], oneRow);
+    }
+
+    async function bulkUpsertAll(data){
+      const themes = data.themes || [];
+      const rows = [];
+      themes.forEach(theme => DATA.units.forEach(unit => {
+        const s = normalizeState(data.items[keyFor(unit, theme)]);
+        rows.push(toRow(unit, theme, s));
+      }));
+      return await post(packForFlow("bulkUpsert", themes, rows));
     }
 
     async function resetAll(){
       currentData = { themes: [...(currentData.themes||DATA.themes)], items: {} };
-      currentData.themes.forEach(th => DATA.units.forEach(u => { currentData.items[keyFor(u,th)] = normalizeState(null); }));
-      return await bulkUpsert(currentData);
+      currentData.themes.forEach(th => DATA.units.forEach(u => currentData.items[keyFor(u,th)] = normalizeState(null)));
+      return await bulkUpsertAll(currentData);
     }
 
     async function addTheme(val){
       const arr = [...(currentData.themes||[])];
       if(!arr.includes(val)) arr.push(val);
       currentData.themes = arr;
-      DATA.units.forEach(u => { currentData.items[keyFor(u,val)] = normalizeState(null); });
-      return await bulkUpsert(currentData);
+      DATA.units.forEach(u => currentData.items[keyFor(u,val)] = normalizeState(null));
+
+      // envia só temas (rows vazio) ou envia tudo — aqui mandamos só temas e 1 linha dummy não é necessário
+      return await post(packForFlow("bulkUpsert", currentData.themes, []));
     }
 
     async function removeTheme(val){
       currentData.themes = (currentData.themes||[]).filter(x => x !== val);
       DATA.units.forEach(u => { delete currentData.items[keyFor(u,val)]; });
-      return await bulkUpsert(currentData);
+      return await post(packForFlow("bulkUpsert", currentData.themes, []));
     }
 
-    return { loadAll, bulkUpsert, save, remove, resetAll, addTheme, removeTheme };
+    return { loadAll, save, remove, resetAll, addTheme, removeTheme, bulkUpsertAll };
   })();
 
   // =========================
   // 4) APP
   // =========================
-  let Provider = FlowProvider; // ✅ força usar Flow
+  let Provider = LocalProvider;
   let currentData = { themes:[...DATA.themes], items:{} };
 
   async function bootstrap(){
-    try{
-      setConn('warn','Conectando ao Excel (Flow)…');
-      currentData = await Provider.loadAll();
-      setConn('ok','Excel online (Flow)');
-    } catch(e){
-      console.warn("Flow falhou; caindo para local", e);
+    // tenta Flow; se falhar, cai para local (mas continua funcionando)
+    if (FLOW.url && FLOW.url.startsWith("http")) {
+      try{
+        Provider = FlowProvider;
+        setConn('warn','Conectando ao Excel (Flow)…');
+        currentData = await Provider.loadAll();
+        setConn('ok','Excel online (Flow)');
+      } catch(e){
+        console.warn("Flow falhou, modo local.", e);
+        Provider = LocalProvider;
+        setConn('err','Modo local (offline)');
+        currentData = await Provider.loadAll();
+      }
+    } else {
       Provider = LocalProvider;
-      setConn('err','Modo local (offline)');
+      setConn('warn','Modo local (offline)');
       currentData = await Provider.loadAll();
     }
 
@@ -518,9 +536,7 @@
   let autosaveInFlight = false;
   let autosaveQueued = false;
 
-  async function doSaveFromInputs(forceImmediate){
-    if (!currentUnit || !currentTheme) return;
-
+  function getStateFromInputs(){
     const sel=document.querySelector('.color-picker .opt.selected');
     let s=null;
     if(sel){
@@ -528,7 +544,7 @@
       s=(v==='')? null:Number(v);
     }
 
-    const obj = normalizeState({
+    return normalizeState({
       status:s,
       obs:obsInput.value,
       com:comInput.value,
@@ -540,7 +556,12 @@
       decisao:decisaoInput.value,
       resumoExec:resumoExecInput.value
     });
+  }
 
+  async function doSave(forceImmediate){
+    if (!currentUnit || !currentTheme) return;
+
+    const obj = getStateFromInputs();
     currentData.items[keyFor(currentUnit,currentTheme)] = obj;
 
     try{
@@ -549,8 +570,8 @@
       setConn('ok', Provider===FlowProvider ? 'Excel online (Flow)' : 'Modo local (offline)');
     } catch(e){
       console.error(e);
-      setConn('err','Falha ao salvar (ver Run history do Flow)');
-      alert('Falha ao salvar. Veja Run history do Flow.');
+      setConn('err','Falha ao salvar (ver Flow)');
+      alert('Falha ao salvar. Veja o Run history do Flow.');
     } finally {
       buildTable();
     }
@@ -561,7 +582,7 @@
     autosaveTimer = setTimeout(async () => {
       if (autosaveInFlight) { autosaveQueued = true; return; }
       autosaveInFlight = true;
-      await doSaveFromInputs(false);
+      await doSave(false);
       autosaveInFlight = false;
 
       if (autosaveQueued) {
@@ -584,7 +605,7 @@
 
     document.getElementById('saveBtn').addEventListener('click',async()=>{
       if (autosaveTimer) { clearTimeout(autosaveTimer); autosaveTimer=null; }
-      await doSaveFromInputs(true);
+      await doSave(true);
       closeCellModal();
     });
 
@@ -596,8 +617,8 @@
         setConn('ok', Provider===FlowProvider ? 'Excel online (Flow)' : 'Modo local (offline)');
       } catch(e){
         console.error(e);
-        setConn('err','Falha ao apagar (ver Run history do Flow)');
-        alert('Falha ao apagar. Veja Run history do Flow.');
+        setConn('err','Falha ao apagar (ver Flow)');
+        alert('Falha ao apagar. Veja o Run history do Flow.');
       }
       closeCellModal();
       buildTable();
@@ -756,10 +777,14 @@
             buildTable();
             renderThemesList();
 
-            setConn('warn','Importado. Salvando no Excel...');
-            await Provider.bulkUpsert(currentData);
-            setConn('ok', Provider===FlowProvider ? 'Excel online (Flow)' : 'Modo local (offline)');
-            alert('✅ Importado e salvo!');
+            if(Provider === FlowProvider){
+              setConn('warn','Importado. Salvando no Excel...');
+              await Provider.bulkUpsertAll(currentData);
+              setConn('ok','Excel online (Flow)');
+              alert('✅ Importado e salvo no Excel online!');
+            } else {
+              alert('Importado no navegador (modo local). O Flow está indisponível no momento.');
+            }
           } else {
             alert('JSON inválido.');
           }
