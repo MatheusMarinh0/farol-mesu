@@ -174,7 +174,7 @@
 
 <script>
   // =========================
-  // 1) CONFIGURAÇÕES (AJUSTE APENAS O FLOW.url)
+  // 1) CONFIGURAÇÕES
   // =========================
   const DATA = {
     units: ["AutoBAn","RodoAnel","Sorocabana","SPVias","RioSP","ViaRio","ViaLagos","Minas_sp","PRVias","Pantanal","ViaSul","ViaCosteira"],
@@ -229,28 +229,9 @@
     };
   }
 
-  // ✅ EXATAMENTE como seu schema pede:
-  // { action: string, themesJson: string, rowsJson: string }
-  function packForFlow(action, themesArray, rowsArray){
-    return {
-      action: String(action || ""),
-      themesJson: JSON.stringify(themesArray || []),
-      rowsJson: JSON.stringify(rowsArray || [])
-    };
-  }
-
-  // helper: resposta pode vir como { result:"{...json...}" } (como você mostrou)
-  function unwrapResult(obj){
-    if(!obj) return obj;
-    if (obj.result && typeof obj.result === "string"){
-      try { return JSON.parse(obj.result); } catch { return { ok:false, error: obj.result }; }
-    }
-    return obj;
-  }
-
-  // =========================
+  // ==========================================
   // 3) PROVIDERS
-  // =========================
+  // ==========================================
   const LocalProvider = {
     async loadAll(){
       const themes=this.getThemes();
@@ -288,7 +269,16 @@
     }
   };
 
+  // ✅ FlowProvider (strings themesJson/rowsJson + normalização de Response)
   const FlowProvider = (function(){
+    function packForFlow(action, themesArray, rowsArray){
+      return {
+        action: String(action || ""),
+        themesJson: JSON.stringify(themesArray || []),
+        rowsJson: JSON.stringify(rowsArray || [])
+      };
+    }
+
     async function post(payload){
       if(!FLOW.url || !FLOW.url.startsWith("http")) throw new Error("FLOW.url não definido");
 
@@ -299,28 +289,52 @@
       });
 
       const text = await res.text();
-      let json = {};
-      try { json = JSON.parse(text); } catch {}
+      let json = null;
+      try { json = JSON.parse(text); } catch { json = { raw: text }; }
+
       if (!res.ok) throw new Error(`Flow HTTP ${res.status}: ${text}`);
-      return json;
+
+      // Normaliza formatos comuns do Flow:
+      // 1) response = { body:{ result:"{...}" } }
+      // 2) response = { result:"{...}" }
+      // 3) response = "{...}"
+      let out = json;
+      if (out && out.body && out.body.result !== undefined) out = out.body.result;
+      if (out && out.result !== undefined) out = out.result;
+
+      if (typeof out === "string") {
+        try { out = JSON.parse(out); } catch { /* fica string */ }
+      }
+
+      return out;
     }
 
     async function loadAll(){
-      const j = await post(packForFlow("load", [], []));
-      const parsed = unwrapResult(j);
-      if(!parsed || !parsed.ok) throw new Error(parsed?.error || "load falhou");
+      const out = await post(packForFlow("load", [], []));
 
-      const themesFinal = (Array.isArray(parsed.themes) && parsed.themes.length) ? parsed.themes : [...DATA.themes];
-
+      // Se respondeu algo, consideramos online. Se ok:false, não cai offline.
+      const themesFinal = [...DATA.themes];
       const items = {};
       themesFinal.forEach(t => DATA.units.forEach(u => items[keyFor(u,t)] = normalizeState(null)));
 
-      (parsed.rows || []).forEach(r => {
+      if (!out || typeof out !== "object") {
+        return { themes: themesFinal, items, __warn: "Resposta inesperada do Flow" };
+      }
+
+      if (out.ok === false) {
+        return { themes: themesFinal, items, __warn: out.error || "Script retornou ok:false" };
+      }
+
+      const themes = (Array.isArray(out.themes) && out.themes.length) ? out.themes : themesFinal;
+      const items2 = {};
+      themes.forEach(t => DATA.units.forEach(u => items2[keyFor(u,t)] = normalizeState(null)));
+
+      (out.rows || []).forEach(r => {
         const theme = r["Tema"];
         const unit  = r["Unidade"];
         if(!theme || !unit) return;
 
-        items[keyFor(unit, theme)] = normalizeState({
+        items2[keyFor(unit, theme)] = normalizeState({
           status: (r["Status (num)"]==="" || r["Status (num)"]==null) ? null : Number(r["Status (num)"]),
           obs: r["Observações"] || "",
           com: r["Comentários"] || "",
@@ -334,27 +348,23 @@
         });
       });
 
-      return { themes: themesFinal, items };
+      return { themes, items: items2 };
     }
 
     async function save(u,t,o){
       currentData.items[keyFor(u,t)] = normalizeState(o);
       const oneRow = toRow(u, t, currentData.items[keyFor(u,t)]);
-
-      const j = await post(packForFlow("bulkUpsert", currentData.themes || [], [oneRow]));
-      const parsed = unwrapResult(j);
-      if(!parsed || !parsed.ok) throw new Error(parsed?.error || "bulkUpsert falhou");
-      return parsed;
+      const out = await post(packForFlow("bulkUpsert", currentData.themes || [], [oneRow]));
+      if (out && out.ok === false) throw new Error(out.error || "bulkUpsert ok:false");
+      return out;
     }
 
     async function remove(u,t){
       currentData.items[keyFor(u,t)] = normalizeState(null);
       const oneRow = toRow(u, t, currentData.items[keyFor(u,t)]);
-
-      const j = await post(packForFlow("bulkUpsert", currentData.themes || [], [oneRow]));
-      const parsed = unwrapResult(j);
-      if(!parsed || !parsed.ok) throw new Error(parsed?.error || "bulkUpsert falhou");
-      return parsed;
+      const out = await post(packForFlow("bulkUpsert", currentData.themes || [], [oneRow]));
+      if (out && out.ok === false) throw new Error(out.error || "bulkUpsert ok:false");
+      return out;
     }
 
     async function bulkUpsertAll(data){
@@ -364,11 +374,9 @@
         const s = normalizeState(data.items[keyFor(unit, theme)]);
         rows.push(toRow(unit, theme, s));
       }));
-
-      const j = await post(packForFlow("bulkUpsert", themes, rows));
-      const parsed = unwrapResult(j);
-      if(!parsed || !parsed.ok) throw new Error(parsed?.error || "bulkUpsert falhou");
-      return parsed;
+      const out = await post(packForFlow("bulkUpsert", themes, rows));
+      if (out && out.ok === false) throw new Error(out.error || "bulkUpsert ok:false");
+      return out;
     }
 
     async function resetAll(){
@@ -381,18 +389,17 @@
       const arr = [...(currentData.themes||[])];
       if(!arr.includes(val)) arr.push(val);
       currentData.themes = arr;
-      const j = await post(packForFlow("bulkUpsert", currentData.themes, []));
-      const parsed = unwrapResult(j);
-      if(!parsed || !parsed.ok) throw new Error(parsed?.error || "bulkUpsert falhou");
-      return parsed;
+
+      const out = await post(packForFlow("bulkUpsert", currentData.themes, []));
+      if (out && out.ok === false) throw new Error(out.error || "bulkUpsert ok:false");
+      return out;
     }
 
     async function removeTheme(val){
       currentData.themes = (currentData.themes||[]).filter(x => x !== val);
-      const j = await post(packForFlow("bulkUpsert", currentData.themes, []));
-      const parsed = unwrapResult(j);
-      if(!parsed || !parsed.ok) throw new Error(parsed?.error || "bulkUpsert falhou");
-      return parsed;
+      const out = await post(packForFlow("bulkUpsert", currentData.themes, []));
+      if (out && out.ok === false) throw new Error(out.error || "bulkUpsert ok:false");
+      return out;
     }
 
     return { loadAll, save, remove, resetAll, addTheme, removeTheme, bulkUpsertAll };
@@ -410,7 +417,7 @@
         Provider = FlowProvider;
         setConn('warn','Conectando ao Excel (Flow)…');
         currentData = await Provider.loadAll();
-        setConn('ok','Excel online (Flow)');
+        setConn('ok', currentData.__warn ? ('Excel online (Flow) — ' + currentData.__warn) : 'Excel online (Flow)');
       } catch(e){
         console.warn("Flow falhou, modo local.", e);
         Provider = LocalProvider;
