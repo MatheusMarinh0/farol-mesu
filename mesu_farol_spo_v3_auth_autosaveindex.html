@@ -1,0 +1,881 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MESU – Farol Executivo (Excel via Power Automate)</title>
+  <style>
+    :root{ --red:#e74c3c; --yellow:#f1c40f; --green:#2ecc71; --gray:#cbd5e1; --ink:#0f172a; --bg:#f7f9fb; --card:#ffffff; --accent:#3b82f6; }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:Segoe UI, Roboto, Arial, Helvetica, sans-serif;background:var(--bg);color:var(--ink)}
+    header{position:sticky;top:0;background:linear-gradient(90deg,#0f172a,#1e293b);color:#fff;padding:16px 20px;z-index:10}
+    header h1{font-size:18px;margin:0}
+    header .meta{opacity:.85;font-size:12px;margin-top:2px;line-height:1.35}
+    .container{padding:18px;max-width:1400px;margin:0 auto}
+    .legend{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+    .badge{display:inline-flex;align-items:center;gap:6px;font-size:12px;background:#eef2ff;color:#1e293b;border-radius:999px;padding:6px 10px}
+    .circle{width:18px;height:18px;border-radius:50%;display:inline-block;border:2px solid rgba(0,0,0,.1)}
+    .grid{overflow:auto;background:var(--card);border:1px solid #e5e7eb;border-radius:10px}
+    .table{border-collapse:separate;border-spacing:0;width:100%}
+    .table th,.table td{border-bottom:1px solid #e5e7eb;padding:10px;text-align:center;vertical-align:middle}
+    .table thead th{position:sticky;top:0;background:#f8fafc;font-weight:600;font-size:13px;z-index:1}
+    .table tbody th.rowhdr{position:sticky;left:0;background:#f8fafc;text-align:left;z-index:1;font-weight:600}
+    .cell-btn{background:transparent;border:none;cursor:pointer;padding:6px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;transition:background .15s}
+    .cell-btn:hover{background:#f1f5f9}
+    .cell-btn .circle{width:20px;height:20px}
+    .has-notes::after{content:'\\1F4DD'; font-size:14px;margin-left:6px}
+    .controls{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0;align-items:center}
+    .controls input, .controls select{padding:8px 10px;border:1px solid #e2e8f0;border-radius:8px}
+    .controls button{padding:8px 12px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;cursor:pointer}
+    .controls button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+    .controls .spacer{flex:1}
+    .pill{border-radius:999px;padding:4px 8px;font-size:12px;border:1px solid #cbd5e1;background:#fff}
+    .pill.ok{border-color:#10b981;color:#065f46}
+    .pill.warn{border-color:#f59e0b;color:#92400e}
+    .pill.err{border-color:#ef4444;color:#7f1d1d}
+    .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center;z-index:50}
+    .modal{background:#fff;border-radius:12px;max-width:760px;width:100%;padding:18px;box-shadow:0 20px 60px rgba(0,0,0,.2);max-height:90vh;overflow:auto}
+    .modal header{position:static;background:none;color:inherit;padding:0;margin-bottom:8px}
+    .modal h2{margin:0;font-size:18px}
+    fieldset{border:1px solid #e5e7eb;border-radius:10px;padding:10px;margin:12px 0}
+    fieldset legend{font-size:12px;color:#475569;padding:0 6px}
+    label{font-size:12px;color:#334155;display:block;margin-bottom:6px}
+    input[type=text], input[type=date], select, textarea{width:100%;padding:8px;border:1px solid #e2e8f0;border-radius:8px}
+    textarea{min-height:70px;resize:vertical}
+    .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+    .btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center}
+    .btn{border:1px solid #cbd5e1;border-radius:8px;background:#fff;padding:8px 10px;cursor:pointer}
+    .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+    .btn.danger{background:var(--red);color:#fff;border-color:var(--red)}
+    #themesModal .list{display:flex;flex-direction:column;gap:6px;margin:10px 0}
+    .theme-item{display:flex;align-items:center;gap:8px;border:1px solid #e5e7eb;border-radius:8px;padding:6px 10px}
+    .theme-item button{margin-left:auto}
+    .small{font-size:12px;color:#64748b}
+  </style>
+</head>
+<body>
+<header>
+  <h1>MESU – Farol Executivo</h1>
+  <div class="meta">
+    Persistência: <b>Excel online via Power Automate</b> (usuários autenticados no tenant).<br/>
+    Auto-save: <b>ativo</b> (salva ~0,8s após qualquer alteração).
+  </div>
+</header>
+
+<div class="container">
+  <div class="legend">
+    <span class="badge"><span class="circle" style="background:var(--red)"></span> Vermelho = Desvio relevante</span>
+    <span class="badge"><span class="circle" style="background:var(--yellow)"></span> Amarelo = Atenção</span>
+    <span class="badge"><span class="circle" style="background:var(--green)"></span> Verde = Sob controle</span>
+    <span class="badge"><span class="circle" style="background:var(--gray)"></span> Sem status</span>
+    <span id="connStatus" class="pill warn">Inicializando…</span>
+  </div>
+
+  <div class="controls">
+    <label>Filtrar tema: <select id="filterTheme"></select></label>
+    <button id="clearFilter">Limpar filtro</button>
+    <span class="spacer"></span>
+    <button id="loginBtn">Entrar</button>
+    <button id="manageThemesBtn">Gerenciar temas</button>
+    <button id="exportBtn" class="primary">Exportar estado (JSON)</button>
+    <button id="exportXlsBtn" class="primary">Exportar base (Excel)</button>
+    <input type="file" id="importFile" accept="application/json" style="display:none" />
+    <button id="importBtn">Importar estado</button>
+    <button id="resetBtn">Zerar anotações</button>
+  </div>
+
+  <div class="grid">
+    <table class="table" id="dashboard"></table>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="backdrop">
+  <div class="modal" id="cellModal">
+    <header><h2 id="modalTitle"></h2></header>
+    <section>
+      <div class="color-picker">
+        <strong style="font-size:12px;color:#334155">Selecionar cor do farol:</strong>
+        <div class="btns">
+          <button class="opt" data-val="-1"><span class="circle" style="background:var(--red)"></span> Vermelho</button>
+          <button class="opt" data-val="0"><span class="circle" style="background:var(--yellow)"></span> Amarelo</button>
+          <button class="opt" data-val="1"><span class="circle" style="background:var(--green)"></span> Verde</button>
+          <button class="opt" data-val=""><span class="circle" style="background:var(--gray)"></span> Limpar</button>
+        </div>
+      </div>
+
+      <fieldset>
+        <legend>Observações e Comentários</legend>
+        <div class="grid-2">
+          <div><label>Observações</label><textarea id="obsInput"></textarea></div>
+          <div><label>Comentários</label><textarea id="comInput"></textarea></div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Gestão do Risco</legend>
+        <div class="grid-2">
+          <div><label>Risco associado</label><input type="text" id="riscoInput"/></div>
+          <div><label>Indicador afetado</label><input type="text" id="indicadorInput"/></div>
+        </div>
+
+        <div class="grid-3" style="margin-top:10px">
+          <div><label>Ação necessária</label><input type="text" id="acaoInput"/></div>
+          <div><label>Responsável</label><input type="text" id="respInput"/></div>
+          <div><label>Data limite</label><input type="date" id="dataLimiteInput"/></div>
+        </div>
+
+        <div class="grid-2" style="margin-top:10px">
+          <div>
+            <label>Decisão de execução</label>
+            <select id="decisaoInput">
+              <option value="">(Selecionar)</option>
+              <option>Executar</option>
+              <option>Postergar</option>
+              <option>Cancelar</option>
+              <option>Escalar para diretoria</option>
+            </select>
+          </div>
+          <div><label>Resumo executivo</label><input type="text" id="resumoExecInput"/></div>
+        </div>
+      </fieldset>
+
+      <div class="btns">
+        <button class="btn" id="cancelBtn">Fechar</button>
+        <button class="btn primary" id="saveBtn">Salvar agora</button>
+        <button class="btn danger" id="deleteBtn">Apagar anotações</button>
+        <span class="small">Auto-save está ligado. O botão “Salvar agora” força envio imediato.</span>
+      </div>
+    </section>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="themesBackdrop">
+  <div class="modal" id="themesModal">
+    <header><h2>Gerenciar temas</h2></header>
+    <section>
+      <div class="list" id="themesList"></div>
+      <div class="grid-2" style="margin-top:8px">
+        <input type="text" id="newThemeInput" placeholder="Novo tema"/>
+        <button class="btn primary" id="addThemeBtn">Adicionar tema</button>
+      </div>
+      <div class="btns" style="margin-top:12px">
+        <button class="btn" id="closeThemesBtn">Fechar</button>
+      </div>
+      <div class="small">⚠️ Alterar temas muda o “banco”. Mantemos histórico pelo campo Key.</div>
+    </section>
+  </div>
+</div>
+
+<!-- MSAL (login do tenant) -->
+<script src="https://alcdn.msauth.net/browser/2.38.2/js/msal-browser.min.js"></script>
+
+<script>
+  // =====================================================================================
+  // ✅ O QUE VOCÊ PRECISA AJUSTAR (2 itens)
+  // -------------------------------------------------------------------------------------
+  // 1) AUTH.clientId e AUTH.tenantId (App Registration / Entra ID)  [obrigatório]
+  // 2) FLOW.url (URL do seu Flow)                                   [já preenchido]
+  //
+  // NO POWER AUTOMATE (Run script):
+  // - Parâmetros do Office Script (recomendado):
+  //   action      = triggerBody()?['action']
+  //   payloadJson = string(triggerBody())
+  // =====================================================================================
+
+  // =========================
+  // 1) CONFIGURAÇÕES
+  // =========================
+  const DATA = {
+    units: ["AutoBAn","RodoAnel","Sorocabana","SPVias","RioSP","ViaRio","ViaLagos","Minas_sp","PRVias","Pantanal","ViaSul","ViaCosteira"],
+    themes:["Segurança","Contratos","Qualidade","Performance","Mobilização","Temas Criticos","Pessoas"]
+  };
+
+  // 🔐 Preencha com os dados do seu App Registration (Entra ID)
+  const AUTH = {
+    clientId: "Motiva",
+    tenantId: "Motiva"
+    // redirectUri é automático (a URL atual)
+  };
+
+  // URL do seu Flow (gatilho HTTP: Any user in my tenant)
+  const FLOW = {
+    url: "https://defaultd233d58a997343a7af696763630548.a0.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/13b978e86ff94d2ea05e1e54b2bb830f/triggers/manual/paths/invoke?api-version=1"
+  };
+
+  // =========================
+  // 2) AUTH (MSAL)
+  // =========================
+  const msalInstance = new msal.PublicClientApplication({
+    auth: {
+      clientId: AUTH.clientId,
+      authority: `https://login.microsoftonline.com/${AUTH.tenantId}`,
+      redirectUri: window.location.href.split('#')[0]
+    },
+    cache: { cacheLocation: "sessionStorage" }
+  });
+
+  async function ensureLoginInteractive() {
+    const accounts = msalInstance.getAllAccounts();
+    if (accounts.length) return accounts[0];
+    const login = await msalInstance.loginPopup({
+      scopes: ["https://service.flow.microsoft.com/.default"]
+    });
+    return login.account;
+  }
+
+  async function getAccessToken() {
+    const accounts = msalInstance.getAllAccounts();
+    const account = accounts.length ? accounts[0] : await ensureLoginInteractive();
+
+    try {
+      const token = await msalInstance.acquireTokenSilent({
+        scopes: ["https://service.flow.microsoft.com/.default"],
+        account
+      });
+      return token.accessToken;
+    } catch (e) {
+      // fallback interativo
+      const token = await msalInstance.acquireTokenPopup({
+        scopes: ["https://service.flow.microsoft.com/.default"]
+      });
+      return token.accessToken;
+    }
+  }
+
+  // =========================
+  // 3) HELPERS
+  // =========================
+  const statusToColor = (v) => v===1? 'var(--green)': v===0? 'var(--yellow)': v===-1? 'var(--red)': 'var(--gray)';
+  const statusToText  = (v) => (v===-1? 'Vermelho' : v===0? 'Amarelo' : v===1? 'Verde' : 'Sem status');
+
+  const THEMES_KEY='mesu::themes';
+  const keyFor=(u,t)=>`mesu::${u}::${t}`;
+
+  const connEl = document.getElementById('connStatus');
+  function setConn(cls,msg){ if(!connEl) return; connEl.className='pill '+cls; connEl.textContent=msg; }
+
+  function escapeHtmlCell(v){ return String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+  function cleanText(v){ return (v||'').replace(/[\\t\\n\\r]+/g,' ').trim(); }
+
+  function normalizeState(s){
+    return Object.assign({
+      status:null, obs:'', com:'', risco:'', indicador:'', acao:'',
+      responsavel:'', dataLimite:'', decisao:'', resumoExec:''
+    }, s||{});
+  }
+
+  function makeKey(unit, theme){ return `${theme}||${unit}`; }
+
+  function toRow(unit, theme, s){
+    return {
+      "Key": makeKey(unit, theme),
+      "Tema": theme,
+      "Unidade": unit,
+      "Status (num)": (s.status==null? "" : s.status),
+      "Status (texto)": statusToText(s.status),
+      "Observações": s.obs || "",
+      "Comentários": s.com || "",
+      "Risco associado": s.risco || "",
+      "Indicador afetado": s.indicador || "",
+      "Ação necessária": s.acao || "",
+      "Responsável": s.responsavel || "",
+      "Data limite": s.dataLimite || "",
+      "Decisão de execução": s.decisao || "",
+      "Resumo executivo": s.resumoExec || ""
+    };
+  }
+
+  // Gera MATRIZ (primeira linha = headers) compatível com o Office Script
+  function buildAllRowsMatrixForExcel(data){
+    const headers = [
+      "Key","Tema","Unidade","Status (num)","Status (texto)",
+      "Observações","Comentários","Risco associado","Indicador afetado",
+      "Ação necessária","Responsável","Data limite","Decisão de execução","Resumo executivo"
+    ];
+    const matrix = [headers];
+    (data.themes || []).forEach(theme => {
+      DATA.units.forEach(unit => {
+        const s = normalizeState(data.items[keyFor(unit, theme)]);
+        const rowObj = toRow(unit, theme, s);
+        matrix.push(headers.map(h => rowObj[h] ?? ""));
+      });
+    });
+    return matrix;
+  }
+
+  // =========================
+  // 4) PROVIDERS
+  // =========================
+  const LocalProvider = {
+    async loadAll(){
+      const themes=this.getThemes();
+      const items={};
+      themes.forEach(t=>DATA.units.forEach(u=>{ items[keyFor(u,t)]=this.loadState(u,t); }));
+      return { themes, items };
+    },
+    getThemes(){
+      const raw=localStorage.getItem(THEMES_KEY);
+      if(raw){
+        try{ const a=JSON.parse(raw); if(Array.isArray(a)&&a.length) return a; }catch(e){}
+      }
+      return [...DATA.themes];
+    },
+    setThemes(a){ localStorage.setItem(THEMES_KEY, JSON.stringify(a)); },
+    loadState(u,t){
+      const raw=localStorage.getItem(keyFor(u,t));
+      if(!raw) return normalizeState(null);
+      try{ return normalizeState(JSON.parse(raw)); }catch(e){ return normalizeState(null); }
+    },
+    async save(u,t,o){ localStorage.setItem(keyFor(u,t), JSON.stringify(o)); },
+    async remove(u,t){ localStorage.removeItem(keyFor(u,t)); },
+    async resetAll(){
+      this.getThemes().forEach(t=>DATA.units.forEach(u=>localStorage.removeItem(keyFor(u,t))));
+      localStorage.removeItem(THEMES_KEY);
+    },
+    async addTheme(v){
+      const arr=this.getThemes();
+      if(!arr.includes(v)){ arr.push(v); this.setThemes(arr); }
+    },
+    async removeTheme(v){
+      const arr=this.getThemes().filter(x=>x!==v);
+      this.setThemes(arr);
+      DATA.units.forEach(u=>localStorage.removeItem(keyFor(u,v)));
+    }
+  };
+
+  const FlowProvider = (function(){
+    async function post(payload){
+      if(!FLOW.url || !FLOW.url.startsWith("http")) throw new Error("FLOW.url não definido");
+
+      const accessToken = await getAccessToken();
+
+      const res = await fetch(FLOW.url, {
+        method: "POST",
+        headers: {
+          "Content-Type":"application/json",
+          "Authorization": `Bearer ${accessToken}`
+        },
+        body: JSON.stringify(payload)
+      });
+
+      const text = await res.text();
+      let json = {};
+      try { json = JSON.parse(text); } catch {}
+      if (!res.ok) throw new Error(`Flow HTTP ${res.status}: ${text}`);
+      return json;
+    }
+
+    async function bulkUpsert(data){
+      const themes = data.themes || [];
+      const rows = buildAllRowsMatrixForExcel(data);
+      return await post({ action:"bulkUpsert", themes, rows });
+    }
+
+    async function loadAll(){
+      const j = await post({ action:"load" });
+
+      // Office Script recomendado retorna { ok:true, themes:[...], rows:[[headers...],[...]] }
+      const themes = (Array.isArray(j.themes) && j.themes.length) ? j.themes : [...DATA.themes];
+
+      const items = {};
+      themes.forEach(t => DATA.units.forEach(u => { items[keyFor(u,t)] = normalizeState(null); }));
+
+      if (Array.isArray(j.rows) && j.rows.length >= 2) {
+        const headers = j.rows[0].map(h => String(h));
+        const idx = (name) => headers.indexOf(name);
+
+        const iTema = idx("Tema");
+        const iUni  = idx("Unidade");
+
+        const iStatusNum = idx("Status (num)");
+        const iObs = idx("Observações");
+        const iCom = idx("Comentários");
+        const iRisco = idx("Risco associado");
+        const iIndic = idx("Indicador afetado");
+        const iAcao = idx("Ação necessária");
+        const iResp = idx("Responsável");
+        const iData = idx("Data limite");
+        const iDec = idx("Decisão de execução");
+        const iRes = idx("Resumo executivo");
+
+        for (let r = 1; r < j.rows.length; r++) {
+          const row = j.rows[r];
+          const theme = (iTema>=0 ? row[iTema] : "") || "";
+          const unit  = (iUni>=0 ? row[iUni] : "") || "";
+          if (!theme || !unit) continue;
+
+          items[keyFor(unit, theme)] = normalizeState({
+            status: (iStatusNum>=0 && row[iStatusNum]!=="" && row[iStatusNum]!==null && row[iStatusNum]!==undefined) ? Number(row[iStatusNum]) : null,
+            obs: (iObs>=0 ? row[iObs] : "") || "",
+            com: (iCom>=0 ? row[iCom] : "") || "",
+            risco: (iRisco>=0 ? row[iRisco] : "") || "",
+            indicador: (iIndic>=0 ? row[iIndic] : "") || "",
+            acao: (iAcao>=0 ? row[iAcao] : "") || "",
+            responsavel: (iResp>=0 ? row[iResp] : "") || "",
+            dataLimite: (iData>=0 ? row[iData] : "") || "",
+            decisao: (iDec>=0 ? row[iDec] : "") || "",
+            resumoExec: (iRes>=0 ? row[iRes] : "") || ""
+          });
+        }
+      }
+
+      return { themes, items };
+    }
+
+    async function save(u,t,o){
+      currentData.items[keyFor(u,t)] = normalizeState(o);
+      return await bulkUpsert(currentData);
+    }
+
+    async function remove(u,t){
+      currentData.items[keyFor(u,t)] = normalizeState(null);
+      return await bulkUpsert(currentData);
+    }
+
+    async function resetAll(){
+      currentData = { themes: [...(currentData.themes||DATA.themes)], items: {} };
+      currentData.themes.forEach(th => DATA.units.forEach(u => { currentData.items[keyFor(u,th)] = normalizeState(null); }));
+      return await bulkUpsert(currentData);
+    }
+
+    async function addTheme(val){
+      const arr = [...(currentData.themes||[])];
+      if(!arr.includes(val)) arr.push(val);
+      currentData.themes = arr;
+      DATA.units.forEach(u => { currentData.items[keyFor(u,val)] = normalizeState(null); });
+      return await bulkUpsert(currentData);
+    }
+
+    async function removeTheme(val){
+      currentData.themes = (currentData.themes||[]).filter(x => x !== val);
+      DATA.units.forEach(u => { delete currentData.items[keyFor(u,val)]; });
+      return await bulkUpsert(currentData);
+    }
+
+    return { loadAll, bulkUpsert, save, remove, resetAll, addTheme, removeTheme };
+  })();
+
+  // =========================
+  // 5) APP
+  // =========================
+  let Provider = LocalProvider;
+  let currentData = { themes:[...DATA.themes], items:{} };
+
+  async function bootstrap(){
+    // Só tenta o Flow se AUTH estiver preenchido
+    const hasAuth = AUTH.clientId && AUTH.tenantId &&
+      !AUTH.clientId.startsWith("PREENCHA") && !AUTH.tenantId.startsWith("PREENCHA");
+
+    if (FLOW.url && FLOW.url.startsWith("http") && hasAuth) {
+      try{
+        Provider = FlowProvider;
+        setConn('warn','Conectando ao Excel (Flow)…');
+        currentData = await Provider.loadAll();
+        setConn('ok','Excel online (Flow)');
+      } catch(e){
+        console.warn("Flow indisponível (auth/cors) -> local", e);
+        Provider = LocalProvider;
+        setConn('err','Modo local (offline)');
+        currentData = await Provider.loadAll();
+      }
+    } else {
+      Provider = LocalProvider;
+      setConn('warn','Modo local (offline)');
+      currentData = await Provider.loadAll();
+    }
+
+    initFilterOptions();
+    buildTable();
+    initCellModalButtons();
+    initThemesModal();
+    bindGlobal();
+  }
+
+  function initFilterOptions(){
+    const sel=document.getElementById('filterTheme');
+    const themes=currentData.themes||DATA.themes;
+    sel.innerHTML='<option value="">(Todos)</option>'+themes.map(t=>`<option value="${t}">${t}</option>`).join('');
+  }
+
+  function buildTable(){
+    const tbl=document.getElementById('dashboard');
+    tbl.innerHTML='';
+    const thead=document.createElement('thead');
+    const hr=document.createElement('tr');
+    const th0=document.createElement('th');
+    th0.textContent='Tema / Unidade';
+    hr.appendChild(th0);
+
+    DATA.units.forEach(u=>{
+      const th=document.createElement('th');
+      th.textContent=u;
+      hr.appendChild(th);
+    });
+
+    thead.appendChild(hr);
+    tbl.appendChild(thead);
+
+    const tbody=document.createElement('tbody');
+    const filter=document.getElementById('filterTheme').value;
+
+    (currentData.themes||[])
+      .filter(t=>!filter || t===filter)
+      .forEach(theme=>{
+        const tr=document.createElement('tr');
+
+        const th=document.createElement('th');
+        th.className='rowhdr';
+        th.textContent=theme;
+        tr.appendChild(th);
+
+        DATA.units.forEach(unit=>{
+          const td=document.createElement('td');
+          const s=currentData.items[keyFor(unit,theme)] || normalizeState(null);
+
+          const btn=document.createElement('button');
+          btn.className='cell-btn';
+          btn.title=`${theme} – ${unit}`;
+
+          const dot=document.createElement('span');
+          dot.className='circle';
+          dot.style.background=statusToColor(s.status);
+          btn.appendChild(dot);
+
+          if(['obs','com','risco','indicador','acao','responsavel','dataLimite','decisao','resumoExec']
+            .some(k=>(s[k]||'').toString().trim())) btn.classList.add('has-notes');
+
+          btn.addEventListener('click',()=>openCellModal(unit,theme));
+
+          td.appendChild(btn);
+          tr.appendChild(td);
+        });
+
+        tbody.appendChild(tr);
+      });
+
+    tbl.appendChild(tbody);
+  }
+
+  let currentUnit=null, currentTheme=null;
+
+  function openCellModal(unit, theme){
+    currentUnit=unit; currentTheme=theme;
+    document.getElementById('modalTitle').textContent=`${theme} — ${unit}`;
+    const state=currentData.items[keyFor(unit,theme)] || normalizeState(null);
+
+    document.querySelectorAll('.color-picker .opt').forEach(b=>{
+      b.classList.remove('selected');
+      const v=b.getAttribute('data-val');
+      if((v==='' && (state.status==null)) || (v!=='' && Number(v)===state.status)) b.classList.add('selected');
+    });
+
+    obsInput.value=state.obs||'';
+    comInput.value=state.com||'';
+    riscoInput.value=state.risco||'';
+    indicadorInput.value=state.indicador||'';
+    acaoInput.value=state.acao||'';
+    respInput.value=state.responsavel||'';
+    dataLimiteInput.value=state.dataLimite||'';
+    decisaoInput.value=state.decisao||'';
+    resumoExecInput.value=state.resumoExec||'';
+
+    document.getElementById('backdrop').style.display='flex';
+  }
+
+  function closeCellModal(){ document.getElementById('backdrop').style.display='none'; }
+
+  // --- AUTO-SAVE (debounce) ---
+  let autosaveTimer = null;
+  let autosaveInFlight = false;
+  let autosaveQueued = false;
+
+  async function doSaveFromInputs(forceImmediate){
+    if (!currentUnit || !currentTheme) return;
+
+    const sel=document.querySelector('.color-picker .opt.selected');
+    let s=null;
+    if(sel){
+      const v=sel.getAttribute('data-val');
+      s=(v==='')? null:Number(v);
+    }
+
+    const obj = normalizeState({
+      status:s,
+      obs:obsInput.value,
+      com:comInput.value,
+      risco:riscoInput.value,
+      indicador:indicadorInput.value,
+      acao:acaoInput.value,
+      responsavel:respInput.value,
+      dataLimite:dataLimiteInput.value,
+      decisao:decisaoInput.value,
+      resumoExec:resumoExecInput.value
+    });
+
+    // atualiza memória local (para UI) antes de salvar
+    currentData.items[keyFor(currentUnit,currentTheme)] = obj;
+
+    try{
+      setConn('warn', forceImmediate ? 'Salvando…' : 'Salvando (auto)…');
+      await Provider.save(currentUnit,currentTheme,obj);
+      setConn('ok', Provider===FlowProvider ? 'Excel online (Flow)' : 'Modo local (offline)');
+    } catch(e){
+      console.error(e);
+      setConn('err','Falha ao salvar (ver Flow)');
+    } finally {
+      buildTable();
+    }
+  }
+
+  function scheduleAutosave(){
+    if (autosaveTimer) clearTimeout(autosaveTimer);
+    autosaveTimer = setTimeout(async () => {
+      // evita concorrência
+      if (autosaveInFlight) { autosaveQueued = true; return; }
+      autosaveInFlight = true;
+      await doSaveFromInputs(false);
+      autosaveInFlight = false;
+
+      if (autosaveQueued) {
+        autosaveQueued = false;
+        scheduleAutosave();
+      }
+    }, 800);
+  }
+
+  function initCellModalButtons(){
+    document.querySelectorAll('.color-picker .opt').forEach(btn=>{
+      btn.addEventListener('click',()=>{
+        document.querySelectorAll('.color-picker .opt').forEach(b=>b.classList.remove('selected'));
+        btn.classList.add('selected');
+        scheduleAutosave();
+      });
+    });
+
+    document.getElementById('cancelBtn').addEventListener('click',()=>closeCellModal());
+
+    document.getElementById('saveBtn').addEventListener('click',async()=>{
+      if (autosaveTimer) { clearTimeout(autosaveTimer); autosaveTimer=null; }
+      await doSaveFromInputs(true);
+      closeCellModal();
+    });
+
+    document.getElementById('deleteBtn').addEventListener('click',async()=>{
+      try{
+        setConn('warn','Apagando...');
+        await Provider.remove(currentUnit,currentTheme);
+        currentData.items[keyFor(currentUnit,currentTheme)] = normalizeState(null);
+        setConn('ok', Provider===FlowProvider ? 'Excel online (Flow)' : 'Modo local (offline)');
+      } catch(e){
+        console.error(e);
+        setConn('err','Falha ao apagar (ver Flow)');
+      }
+      closeCellModal();
+      buildTable();
+    });
+
+    // listeners de auto-save em qualquer alteração
+    const watch = [obsInput, comInput, riscoInput, indicadorInput, acaoInput, respInput, dataLimiteInput, decisaoInput, resumoExecInput];
+    watch.forEach(el => {
+      el.addEventListener('input', scheduleAutosave);
+      el.addEventListener('change', scheduleAutosave);
+    });
+  }
+
+  function openThemesModal(){ renderThemesList(); document.getElementById('themesBackdrop').style.display='flex'; }
+  function closeThemesModal(){ document.getElementById('themesBackdrop').style.display='none'; }
+
+  function renderThemesList(){
+    const list=document.getElementById('themesList');
+    list.innerHTML='';
+    const arr=currentData.themes||[];
+
+    arr.forEach(t=>{
+      const div=document.createElement('div');
+      div.className='theme-item';
+
+      const span=document.createElement('span');
+      span.textContent=t;
+      div.appendChild(span);
+
+      const del=document.createElement('button');
+      del.className='btn danger';
+      del.textContent='Excluir';
+
+      del.addEventListener('click',async()=>{
+        if(!confirm(`Excluir o tema "${t}"?`)) return;
+        try{
+          setConn('warn','Atualizando temas...');
+          await Provider.removeTheme(t);
+          currentData.themes = currentData.themes.filter(x=>x!==t);
+          DATA.units.forEach(u=>{ delete currentData.items[keyFor(u,t)]; });
+          setConn('ok', Provider===FlowProvider ? 'Excel online (Flow)' : 'Modo local (offline)');
+          initFilterOptions(); buildTable(); renderThemesList();
+        }catch(e){
+          console.error(e);
+          setConn('err','Falha ao remover tema');
+          alert('Falha ao remover tema. Veja Run history do Flow.');
+        }
+      });
+
+      div.appendChild(del);
+      list.appendChild(div);
+    });
+  }
+
+  function initThemesModal(){
+    document.getElementById('manageThemesBtn').addEventListener('click',openThemesModal);
+    document.getElementById('closeThemesBtn').addEventListener('click',closeThemesModal);
+
+    document.getElementById('addThemeBtn').addEventListener('click',async()=>{
+      const input=document.getElementById('newThemeInput');
+      const val=(input.value||'').trim();
+      if(!val) return;
+
+      if((currentData.themes||[]).includes(val)){
+        alert('Tema já existe.');
+        return;
+      }
+
+      try{
+        setConn('warn','Adicionando tema...');
+        await Provider.addTheme(val);
+        input.value='';
+        currentData.themes.push(val);
+        DATA.units.forEach(u=>{ currentData.items[keyFor(u,val)] = normalizeState(null); });
+        setConn('ok', Provider===FlowProvider ? 'Excel online (Flow)' : 'Modo local (offline)');
+        initFilterOptions(); buildTable(); renderThemesList();
+      }catch(e){
+        console.error(e);
+        setConn('err','Falha ao adicionar tema');
+        alert('Falha ao adicionar tema. Veja Run history do Flow.');
+      }
+    });
+  }
+
+  function download(filename, text){
+    const a=document.createElement('a');
+    a.href='data:application/json;charset=utf-8,'+encodeURIComponent(text);
+    a.download=filename;
+    a.style.display='none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+
+  function exportState(){ download('mesu_estado.json', JSON.stringify(currentData, null, 2)); }
+
+  function exportExcel(){
+    const cols=['Tema','Unidade','Status (num)','Status (texto)','Observações','Comentários','Risco associado','Indicador afetado','Ação necessária','Responsável','Data limite','Decisão de execução','Resumo executivo'];
+    const rows=[];
+    (currentData.themes||[]).forEach(t=>{
+      DATA.units.forEach(u=>{
+        const s=normalizeState(currentData.items[keyFor(u,t)]);
+        rows.push([ t,u,(s.status==null?'':s.status), statusToText(s.status), cleanText(s.obs), cleanText(s.com), cleanText(s.risco), cleanText(s.indicador), cleanText(s.acao), cleanText(s.responsavel), (s.dataLimite||'').toString(), cleanText(s.decisao), cleanText(s.resumoExec) ]);
+      });
+    });
+
+    let _h='<table><thead><tr>'+cols.map(c=>'<th>'+escapeHtmlCell(c)+'</th>').join('')+'</tr></thead><tbody>';
+    rows.forEach(r=>{ _h+='<tr>'+r.map(v=>'<td>'+escapeHtmlCell(v)+'</td>').join('')+'</tr>'; });
+    _h+='</tbody></table>';
+
+    const blob=new Blob(['\\ufeff'+_h],{type:'application/vnd.ms-excel;charset=utf-8;'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;
+    a.download='mesu_base.xls';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(()=>{URL.revokeObjectURL(url); a.remove();},0);
+  }
+
+  async function resetAll(){
+    if(!confirm('Tem certeza que deseja zerar todas as anotações e cores?')) return;
+    try{
+      setConn('warn','Zerando...');
+      await Provider.resetAll();
+      currentData = await Provider.loadAll();
+      setConn('ok', Provider===FlowProvider ? 'Excel online (Flow)' : 'Modo local (offline)');
+      initFilterOptions(); buildTable(); renderThemesList();
+      closeCellModal(); closeThemesModal();
+    }catch(e){
+      console.error(e);
+      setConn('err','Falha ao zerar');
+      alert('Falha ao zerar. Veja Run history do Flow.');
+    }
+  }
+
+  function bindGlobal(){
+    document.getElementById('loginBtn').addEventListener('click', async()=>{
+      try{
+        setConn('warn','Abrindo login…');
+        await ensureLoginInteractive();
+        setConn('warn','Conectando ao Excel (Flow)…');
+        Provider = FlowProvider;
+        currentData = await Provider.loadAll();
+        setConn('ok','Excel online (Flow)');
+        initFilterOptions(); buildTable();
+      }catch(e){
+        console.error(e);
+        setConn('err','Login falhou / sem permissão');
+        alert('Falha no login. Confira App Registration (clientId/tenantId) e permissões.');
+      }
+    });
+
+    document.getElementById('clearFilter').addEventListener('click',()=>{
+      document.getElementById('filterTheme').value='';
+      buildTable();
+    });
+
+    document.getElementById('filterTheme').addEventListener('change',buildTable);
+    document.getElementById('exportBtn').addEventListener('click',exportState);
+    document.getElementById('exportXlsBtn').addEventListener('click',exportExcel);
+
+    document.getElementById('importBtn').addEventListener('click',()=>document.getElementById('importFile').click());
+    document.getElementById('importFile').addEventListener('change',async(e)=>{
+      const f=(e.target.files&&e.target.files[0])? e.target.files[0]:null;
+      if(f){
+        try{
+          const txt=await f.text();
+          const json=JSON.parse(txt);
+          if(json && json.items && json.themes){
+            currentData = json;
+            initFilterOptions();
+            buildTable();
+            renderThemesList();
+
+            if(Provider === FlowProvider){
+              setConn('warn','Importado. Salvando no Excel...');
+              await Provider.bulkUpsert(currentData);
+              setConn('ok','Excel online (Flow)');
+              alert('✅ Importado e salvo no Excel online!');
+            } else {
+              alert('Importado no navegador (modo local). Clique “Entrar” para sincronizar com Excel.');
+            }
+          } else {
+            alert('JSON inválido.');
+          }
+        }catch(err){
+          console.error(err);
+          alert('Erro ao importar JSON.');
+        }
+      }
+      e.target.value='';
+    });
+
+    document.getElementById('resetBtn').addEventListener('click',resetAll);
+
+    document.getElementById('backdrop').addEventListener('click',(e)=>{
+      if(e.target.id==='backdrop') closeCellModal();
+    });
+
+    document.getElementById('themesBackdrop').addEventListener('click',(e)=>{
+      if(e.target.id==='themesBackdrop') closeThemesModal();
+    });
+  }
+
+  window.addEventListener('DOMContentLoaded', bootstrap);
+</script>
+</body>
+</html>
