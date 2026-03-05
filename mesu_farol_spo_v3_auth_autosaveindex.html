@@ -90,8 +90,7 @@
   </div>
 
   <div class="small" style="margin-top:10px">
-    Dica: se der erro, abra o <b>Run history</b> do Flow e veja se chegou <code class="k">action</code>,
-    <code class="k">themesJson</code> e <code class="k">rowsJson</code>.
+    Dica: no Flow, o gatilho HTTP deve receber <code class="k">action</code>, <code class="k">themesJson</code> e <code class="k">rowsJson</code> (strings).
   </div>
 </div>
 
@@ -269,82 +268,88 @@
     }
   };
 
-  // ✅ FlowProvider (strings themesJson/rowsJson + normalização de Response)
+  // ✅ FlowProvider (envia themesJson/rowsJson como STRING e normaliza Response)
   const FlowProvider = (function(){
     function packForFlow(action, themesArray, rowsArray){
-  return {
-    action: action,
-    themesJson: JSON.stringify(themesArray || []),
-    rowsJson: JSON.stringify(rowsArray || [])
-  };
-}
+      const a = String(action ?? "").trim(); // evita whitespace
+      return {
+        action: a,
+        themesJson: JSON.stringify(themesArray || []),
+        rowsJson: JSON.stringify(rowsArray || [])
+      };
+    }
+
     async function post(payload){
-  const res = await fetch(FLOW.url, {
-    method: "POST",
-    headers: { "Content-Type":"application/json" },
-    body: JSON.stringify(payload)
-  });
+      if(!FLOW.url || !FLOW.url.startsWith("http")) throw new Error("FLOW.url não definido");
 
-  const raw = await res.text();
-  if (!res.ok) throw new Error(`Flow HTTP ${res.status}: ${raw}`);
+      const res = await fetch(FLOW.url, {
+        method: "POST",
+        headers: { "Content-Type":"application/json" },
+        body: JSON.stringify(payload)
+      });
 
-  // o Response do Flow está mandando o Body do Run script (objeto com "result")
-  let outer = {};
-  try { outer = JSON.parse(raw); } catch { outer = { result: raw }; }
+      const raw = await res.text();
+      if (!res.ok) throw new Error(`Flow HTTP ${res.status}: ${raw}`);
 
-  // se vier { result: "....json string...." }, parseia o result
-  if (outer && typeof outer.result === "string") {
-    try { return JSON.parse(outer.result); } catch { return { ok:false, error:"Resposta result não é JSON válido", raw: outer.result }; }
-  }
+      // Seu Response pode estar devolvendo:
+      // A) {"result":"{...json string...}","logs":[]}
+      // B) {"ok":true,...}
+      let outer = {};
+      try { outer = JSON.parse(raw); } catch { outer = { result: raw }; }
 
-  // fallback
-  return outer;
-}
+      if (outer && typeof outer.result === "string") {
+        try { return JSON.parse(outer.result); }
+        catch { return { ok:false, error:"Resposta 'result' não é JSON válido", raw: outer.result }; }
+      }
+
+      return outer;
+    }
 
     async function loadAll(){
-  const j = await post(packForFlow("load", [], []));
-  if (!j || j.ok === false) throw new Error(j?.error || "Falha no load");
+      const j = await post(packForFlow("load", [], []));
+      if (!j || j.ok === false) throw new Error(j?.error || "Falha no load");
 
-  const themesFinal = (Array.isArray(j.themes) && j.themes.length) ? j.themes : [...DATA.themes];
-  const items = {};
-  themesFinal.forEach(t => DATA.units.forEach(u => items[keyFor(u,t)] = normalizeState(null)));
+      const themesFinal = (Array.isArray(j.themes) && j.themes.length) ? j.themes : [...DATA.themes];
+      const items = {};
+      themesFinal.forEach(t => DATA.units.forEach(u => items[keyFor(u,t)] = normalizeState(null)));
 
-  (j.rows || []).forEach(r => {
-    const theme = r["Tema"];
-    const unit  = r["Unidade"];
-    if(!theme || !unit) return;
+      const rows = Array.isArray(j.rows) ? j.rows : [];
+      rows.forEach(r => {
+        const theme = r["Tema"];
+        const unit  = r["Unidade"];
+        if(!theme || !unit) return;
 
-    items[keyFor(unit, theme)] = normalizeState({
-      status: (r["Status (num)"]==="" || r["Status (num)"]==null) ? null : Number(r["Status (num)"]),
-      obs: r["Observações"] || "",
-      com: r["Comentários"] || "",
-      risco: r["Risco associado"] || "",
-      indicador: r["Indicador afetado"] || "",
-      acao: r["Ação necessária"] || "",
-      responsavel: r["Responsável"] || "",
-      dataLimite: r["Data limite"] || "",
-      decisao: r["Decisão de execução"] || "",
-      resumoExec: r["Resumo executivo"] || ""
-    });
-  });
+        items[keyFor(unit, theme)] = normalizeState({
+          status: (r["Status (num)"]==="" || r["Status (num)"]==null) ? null : Number(r["Status (num)"]),
+          obs: r["Observações"] || "",
+          com: r["Comentários"] || "",
+          risco: r["Risco associado"] || "",
+          indicador: r["Indicador afetado"] || "",
+          acao: r["Ação necessária"] || "",
+          responsavel: r["Responsável"] || "",
+          dataLimite: r["Data limite"] || "",
+          decisao: r["Decisão de execução"] || "",
+          resumoExec: r["Resumo executivo"] || ""
+        });
+      });
 
-  return { themes: themesFinal, items };
-}
+      return { themes: themesFinal, items };
+    }
 
     async function save(u,t,o){
-  currentData.items[keyFor(u,t)] = normalizeState(o);
-  const oneRow = toRow(u, t, currentData.items[keyFor(u,t)]);
-  const j = await post(packForFlow("bulkUpsert", currentData.themes || [], [oneRow]));
-  if (!j || j.ok === false) throw new Error(j?.error || "Falha no bulkUpsert");
-  return j;
-}
+      currentData.items[keyFor(u,t)] = normalizeState(o);
+      const oneRow = toRow(u, t, currentData.items[keyFor(u,t)]);
+      const j = await post(packForFlow("bulkUpsert", currentData.themes || [], [oneRow]));
+      if (!j || j.ok === false) throw new Error(j?.error || "Falha no bulkUpsert");
+      return j;
+    }
 
     async function remove(u,t){
       currentData.items[keyFor(u,t)] = normalizeState(null);
       const oneRow = toRow(u, t, currentData.items[keyFor(u,t)]);
-      const out = await post(packForFlow("bulkUpsert", currentData.themes || [], [oneRow]));
-      if (out && out.ok === false) throw new Error(out.error || "bulkUpsert ok:false");
-      return out;
+      const j = await post(packForFlow("bulkUpsert", currentData.themes || [], [oneRow]));
+      if (!j || j.ok === false) throw new Error(j?.error || "Falha no bulkUpsert");
+      return j;
     }
 
     async function bulkUpsertAll(data){
@@ -354,9 +359,9 @@
         const s = normalizeState(data.items[keyFor(unit, theme)]);
         rows.push(toRow(unit, theme, s));
       }));
-      const out = await post(packForFlow("bulkUpsert", themes, rows));
-      if (out && out.ok === false) throw new Error(out.error || "bulkUpsert ok:false");
-      return out;
+      const j = await post(packForFlow("bulkUpsert", themes, rows));
+      if (!j || j.ok === false) throw new Error(j?.error || "Falha no bulkUpsert");
+      return j;
     }
 
     async function resetAll(){
@@ -366,20 +371,24 @@
     }
 
     async function addTheme(val){
+      const v = String(val||"").trim();
+      if(!v) return { ok:true };
       const arr = [...(currentData.themes||[])];
-      if(!arr.includes(val)) arr.push(val);
+      if(!arr.includes(v)) arr.push(v);
       currentData.themes = arr;
 
-      const out = await post(packForFlow("bulkUpsert", currentData.themes, []));
-      if (out && out.ok === false) throw new Error(out.error || "bulkUpsert ok:false");
-      return out;
+      const j = await post(packForFlow("bulkUpsert", currentData.themes, []));
+      if (!j || j.ok === false) throw new Error(j?.error || "Falha no bulkUpsert");
+      return j;
     }
 
     async function removeTheme(val){
-      currentData.themes = (currentData.themes||[]).filter(x => x !== val);
-      const out = await post(packForFlow("bulkUpsert", currentData.themes, []));
-      if (out && out.ok === false) throw new Error(out.error || "bulkUpsert ok:false");
-      return out;
+      const v = String(val||"").trim();
+      currentData.themes = (currentData.themes||[]).filter(x => x !== v);
+
+      const j = await post(packForFlow("bulkUpsert", currentData.themes, []));
+      if (!j || j.ok === false) throw new Error(j?.error || "Falha no bulkUpsert");
+      return j;
     }
 
     return { loadAll, save, remove, resetAll, addTheme, removeTheme, bulkUpsertAll };
@@ -397,9 +406,8 @@
         Provider = FlowProvider;
         setConn('warn','Conectando ao Excel (Flow)…');
         currentData = await Provider.loadAll();
-        setConn('ok', currentData.__warn ? ('Excel online (Flow) — ' + currentData.__warn) : 'Excel online (Flow)');
+        setConn('ok','Excel online (Flow)');
       } catch(e){
-        console.warn("Flow falhou, modo local.", e);
         Provider = LocalProvider;
         setConn('err','Modo local (offline)');
         currentData = await Provider.loadAll();
@@ -548,9 +556,8 @@
       await Provider.save(currentUnit,currentTheme,obj);
       setConn('ok', Provider===FlowProvider ? 'Excel online (Flow)' : 'Modo local (offline)');
     } catch(e){
-      console.error(e);
-      setConn('err','Falha ao salvar (ver Flow)');
-      alert('Falha ao salvar. Veja o Run history do Flow.');
+      setConn('err', 'Falha ao salvar');
+      alert(String(e?.message || e));
     } finally {
       buildTable();
     }
@@ -595,9 +602,8 @@
         currentData.items[keyFor(currentUnit,currentTheme)] = normalizeState(null);
         setConn('ok', Provider===FlowProvider ? 'Excel online (Flow)' : 'Modo local (offline)');
       } catch(e){
-        console.error(e);
-        setConn('err','Falha ao apagar (ver Flow)');
-        alert('Falha ao apagar. Veja o Run history do Flow.');
+        setConn('err','Falha ao apagar');
+        alert(String(e?.message || e));
       }
       closeCellModal();
       buildTable();
@@ -640,9 +646,8 @@
           setConn('ok', Provider===FlowProvider ? 'Excel online (Flow)' : 'Modo local (offline)');
           initFilterOptions(); buildTable(); renderThemesList();
         }catch(e){
-          console.error(e);
           setConn('err','Falha ao remover tema');
-          alert('Falha ao remover tema. Veja Run history do Flow.');
+          alert(String(e?.message || e));
         }
       });
 
@@ -674,9 +679,8 @@
         setConn('ok', Provider===FlowProvider ? 'Excel online (Flow)' : 'Modo local (offline)');
         initFilterOptions(); buildTable(); renderThemesList();
       }catch(e){
-        console.error(e);
         setConn('err','Falha ao adicionar tema');
-        alert('Falha ao adicionar tema. Veja Run history do Flow.');
+        alert(String(e?.message || e));
       }
     });
   }
@@ -727,9 +731,8 @@
       initFilterOptions(); buildTable(); renderThemesList();
       closeCellModal(); closeThemesModal();
     }catch(e){
-      console.error(e);
       setConn('err','Falha ao zerar');
-      alert('Falha ao zerar. Veja Run history do Flow.');
+      alert(String(e?.message || e));
     }
   }
 
@@ -768,8 +771,7 @@
             alert('JSON inválido.');
           }
         }catch(err){
-          console.error(err);
-          alert('Erro ao importar JSON.');
+          alert(String(err?.message || err));
         }
       }
       e.target.value='';
