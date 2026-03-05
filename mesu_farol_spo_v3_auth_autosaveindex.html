@@ -90,8 +90,8 @@
   </div>
 
   <div class="small" style="margin-top:10px">
-    Dica: no Run history do Flow, confirme que chegou <code class="k">action</code>,
-    <code class="k">themesJson</code> e <code class="k">rowsJson</code> (strings JSON).
+    Dica: se der erro, abra o <b>Run history</b> do Flow e veja se chegou <code class="k">action</code>,
+    <code class="k">themesJson</code> e <code class="k">rowsJson</code>.
   </div>
 </div>
 
@@ -229,9 +229,11 @@
     };
   }
 
-  // ✅ MUITO IMPORTANTE:
-  // Seu Office Script recebe themesJson e rowsJson como STRING.
-  // Então enviamos themesJson/rowsJson já com JSON.stringify.
+  // ✅ AGORA compatível com o seu Office Script:
+  // Run script recebe:
+  // - action     = triggerBody()?['action']
+  // - themesJson = triggerBody()?['themesJson']
+  // - rowsJson   = triggerBody()?['rowsJson']
   function packForFlow(action, themesArray, rowsArray){
     return {
       action: action,
@@ -281,32 +283,6 @@
   };
 
   const FlowProvider = (function(){
-    function tryParseJson(s){
-      try{ return JSON.parse(s); }catch{ return null; }
-    }
-
-    // Normaliza resposta do Flow:
-    // - Pode ser JSON direto
-    // - Pode vir { result: "<string JSON>" } do "Run script"
-    // - Pode vir string JSON pura
-    function normalizeFlowResponse(maybe){
-      if (maybe == null) return null;
-
-      // se já é objeto e tem "result" string (padrão do Run script)
-      if (typeof maybe === "object" && typeof maybe.result === "string") {
-        const parsed = tryParseJson(maybe.result);
-        return parsed ?? maybe;
-      }
-
-      // se é string e é JSON
-      if (typeof maybe === "string") {
-        const parsed = tryParseJson(maybe);
-        return parsed ?? { raw: maybe };
-      }
-
-      return maybe;
-    }
-
     async function post(payload){
       if(!FLOW.url || !FLOW.url.startsWith("http")) throw new Error("FLOW.url não definido");
 
@@ -317,43 +293,27 @@
       });
 
       const text = await res.text();
-
-      // tenta JSON
-      const json = tryParseJson(text);
-      const normalized = normalizeFlowResponse(json ?? text);
-
-      if (!res.ok) {
-        const msg = (typeof normalized === "object" ? JSON.stringify(normalized) : String(normalized));
-        throw new Error(`Flow HTTP ${res.status}: ${msg}`);
-      }
-
-      return normalized;
+      let json = {};
+      try { json = JSON.parse(text); } catch {}
+      if (!res.ok) throw new Error(`Flow HTTP ${res.status}: ${text}`);
+      return json;
     }
 
     async function loadAll(){
       const j = await post(packForFlow("load", [], []));
 
-      // Seu Office Script retorna: JSON.stringify({ ok:true, themes:[...], rows:[{...}] })
-      // Dependendo do "Response", pode virar:
-      // - {ok:true,themes:[...],rows:[...]}
-      // - {result:"{...json...}"}
-      // - "{...json...}"
-      const ok = (j && typeof j === "object" && j.ok === true);
-      if (!ok) {
-        // se não veio ok:true, ainda tentamos ler themes/rows mesmo assim
-        // (mas se vier erro, mostramos)
-        if (j && typeof j === "object" && j.error) {
-          throw new Error(String(j.error));
-        }
-      }
+      // Seu Office Script devolve STRING JSON.
+      // O Flow pode devolver isso em "result" (se você usar a saída do Run script).
+      // Aqui aceitamos ambos: {result:"..."} ou já parseado.
+      const raw = (typeof j === "string") ? j : (j.result || j.body || j);
+      const parsed = (typeof raw === "string") ? JSON.parse(raw) : raw;
 
-      const themes = (j && Array.isArray(j.themes) && j.themes.length) ? j.themes : [...DATA.themes];
-      const rows = (j && Array.isArray(j.rows)) ? j.rows : [];
+      const themesFinal = (Array.isArray(parsed.themes) && parsed.themes.length) ? parsed.themes : [...DATA.themes];
 
       const items = {};
-      themes.forEach(t => DATA.units.forEach(u => items[keyFor(u,t)] = normalizeState(null)));
+      themesFinal.forEach(t => DATA.units.forEach(u => items[keyFor(u,t)] = normalizeState(null)));
 
-      rows.forEach(r => {
+      (parsed.rows || []).forEach(r => {
         const theme = r["Tema"];
         const unit  = r["Unidade"];
         if(!theme || !unit) return;
@@ -372,10 +332,9 @@
         });
       });
 
-      return { themes, items };
+      return { themes: themesFinal, items };
     }
 
-    // ✅ salva 1 célula (1 row) por vez
     async function saveOneRow(themesArray, oneRowObj){
       return await post(packForFlow("bulkUpsert", themesArray, [oneRowObj]));
     }
@@ -413,8 +372,6 @@
       if(!arr.includes(val)) arr.push(val);
       currentData.themes = arr;
       DATA.units.forEach(u => currentData.items[keyFor(u,val)] = normalizeState(null));
-
-      // Atualiza tabela de temas no Excel (rows pode ser vazio; Office Script atualiza temas se themes.length > 0)
       return await post(packForFlow("bulkUpsert", currentData.themes, []));
     }
 
