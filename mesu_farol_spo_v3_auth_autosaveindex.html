@@ -181,7 +181,6 @@
     themes:["Segurança","Contratos","Qualidade","Performance","Mobilização","Temas Criticos","Pessoas"]
   };
 
-  // ✅ SEU LINK DO FLOW (ANYONE)
   const FLOW = {
     url: "https://defaultd233d58a997343a7af696763630548.a0.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/13b978e86ff94d2ea05e1e54b2bb830f/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=cti9BiNiYMvDVF54-Dflx3ApyAaHb-sjGeezxIVK9Po"
   };
@@ -195,8 +194,13 @@
   const THEMES_KEY='mesu::themes';
   const keyFor=(u,t)=>`mesu::${u}::${t}`;
 
-  const connEl = document.getElementById('connStatus');
-  function setConn(cls,msg){ if(!connEl) return; connEl.className='pill '+cls; connEl.textContent=msg; }
+  let connEl = null;
+  function setConn(cls,msg){
+    if(!connEl) connEl = document.getElementById('connStatus');
+    if(!connEl) return;
+    connEl.className='pill '+cls;
+    connEl.textContent=msg;
+  }
 
   function escapeHtmlCell(v){ return String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
   function cleanText(v){ return (v||'').replace(/[\t\n\r]+/g,' ').trim(); }
@@ -229,8 +233,6 @@
     };
   }
 
-  // ✅ EXATAMENTE como seu schema pede:
-  // { action: string, themesJson: string, rowsJson: string }
   function packForFlow(action, themesArray, rowsArray){
     return {
       action: String(action || ""),
@@ -239,13 +241,24 @@
     };
   }
 
-  // helper: resposta pode vir como { result:"{...json...}" } (como você mostrou)
-  function unwrapResult(obj){
-    if(!obj) return obj;
-    if (obj.result && typeof obj.result === "string"){
-      try { return JSON.parse(obj.result); } catch { return { ok:false, error: obj.result }; }
+  function safeJsonParse(x){
+    if (x == null) return null;
+    if (typeof x === "object") return x;
+    if (typeof x === "string" && x.trim()){
+      try { return JSON.parse(x); } catch { return null; }
     }
-    return obj;
+    return null;
+  }
+
+  async function fetchWithTimeout(url, opts={}, timeoutMs=12000){
+    const ac = new AbortController();
+    const t = setTimeout(()=>ac.abort(), timeoutMs);
+    try{
+      const res = await fetch(url, { ...opts, signal: ac.signal });
+      return res;
+    } finally {
+      clearTimeout(t);
+    }
   }
 
   // =========================
@@ -292,25 +305,41 @@
     async function post(payload){
       if(!FLOW.url || !FLOW.url.startsWith("http")) throw new Error("FLOW.url não definido");
 
-      const res = await fetch(FLOW.url, {
+      const res = await fetchWithTimeout(FLOW.url, {
         method: "POST",
         headers: { "Content-Type":"application/json" },
         body: JSON.stringify(payload)
-      });
+      }, 12000);
 
       const text = await res.text();
-      let json = {};
-      try { json = JSON.parse(text); } catch {}
+      let json = safeJsonParse(text) || { raw: text };
+
       if (!res.ok) throw new Error(`Flow HTTP ${res.status}: ${text}`);
-      return json;
+
+      // seu Response pode devolver { result:"{...json...}" } (string)
+      // ou pode devolver direto o json do script
+      let out = json;
+
+      // caso seja outputs('Run_script') inteiro
+      if (out && out.body && out.body.result) out = out.body.result;
+
+      // se tiver "result" no topo
+      if (out && out.result) out = out.result;
+
+      // agora tenta parsear se ainda for string
+      const parsed = safeJsonParse(out) || out;
+
+      return parsed;
     }
 
     async function loadAll(){
-      const j = await post(packForFlow("load", [], []));
-      const parsed = unwrapResult(j);
-      if(!parsed || !parsed.ok) throw new Error(parsed?.error || "load falhou");
+      const parsed = await post(packForFlow("load", [], []));
 
-      const themesFinal = (Array.isArray(parsed.themes) && parsed.themes.length) ? parsed.themes : [...DATA.themes];
+      if (!parsed || !parsed.ok) throw new Error(parsed?.error || "load falhou");
+
+      const themesFinal = (Array.isArray(parsed.themes) && parsed.themes.length)
+        ? parsed.themes
+        : [...DATA.themes];
 
       const items = {};
       themesFinal.forEach(t => DATA.units.forEach(u => items[keyFor(u,t)] = normalizeState(null)));
@@ -340,20 +369,16 @@
     async function save(u,t,o){
       currentData.items[keyFor(u,t)] = normalizeState(o);
       const oneRow = toRow(u, t, currentData.items[keyFor(u,t)]);
-
-      const j = await post(packForFlow("bulkUpsert", currentData.themes || [], [oneRow]));
-      const parsed = unwrapResult(j);
-      if(!parsed || !parsed.ok) throw new Error(parsed?.error || "bulkUpsert falhou");
+      const parsed = await post(packForFlow("bulkUpsert", currentData.themes || [], [oneRow]));
+      if (!parsed || !parsed.ok) throw new Error(parsed?.error || "bulkUpsert falhou");
       return parsed;
     }
 
     async function remove(u,t){
       currentData.items[keyFor(u,t)] = normalizeState(null);
       const oneRow = toRow(u, t, currentData.items[keyFor(u,t)]);
-
-      const j = await post(packForFlow("bulkUpsert", currentData.themes || [], [oneRow]));
-      const parsed = unwrapResult(j);
-      if(!parsed || !parsed.ok) throw new Error(parsed?.error || "bulkUpsert falhou");
+      const parsed = await post(packForFlow("bulkUpsert", currentData.themes || [], [oneRow]));
+      if (!parsed || !parsed.ok) throw new Error(parsed?.error || "bulkUpsert falhou");
       return parsed;
     }
 
@@ -364,10 +389,8 @@
         const s = normalizeState(data.items[keyFor(unit, theme)]);
         rows.push(toRow(unit, theme, s));
       }));
-
-      const j = await post(packForFlow("bulkUpsert", themes, rows));
-      const parsed = unwrapResult(j);
-      if(!parsed || !parsed.ok) throw new Error(parsed?.error || "bulkUpsert falhou");
+      const parsed = await post(packForFlow("bulkUpsert", themes, rows));
+      if (!parsed || !parsed.ok) throw new Error(parsed?.error || "bulkUpsert falhou");
       return parsed;
     }
 
@@ -381,17 +404,15 @@
       const arr = [...(currentData.themes||[])];
       if(!arr.includes(val)) arr.push(val);
       currentData.themes = arr;
-      const j = await post(packForFlow("bulkUpsert", currentData.themes, []));
-      const parsed = unwrapResult(j);
-      if(!parsed || !parsed.ok) throw new Error(parsed?.error || "bulkUpsert falhou");
+      const parsed = await post(packForFlow("bulkUpsert", currentData.themes, []));
+      if (!parsed || !parsed.ok) throw new Error(parsed?.error || "bulkUpsert falhou");
       return parsed;
     }
 
     async function removeTheme(val){
       currentData.themes = (currentData.themes||[]).filter(x => x !== val);
-      const j = await post(packForFlow("bulkUpsert", currentData.themes, []));
-      const parsed = unwrapResult(j);
-      if(!parsed || !parsed.ok) throw new Error(parsed?.error || "bulkUpsert falhou");
+      const parsed = await post(packForFlow("bulkUpsert", currentData.themes, []));
+      if (!parsed || !parsed.ok) throw new Error(parsed?.error || "bulkUpsert falhou");
       return parsed;
     }
 
@@ -405,6 +426,8 @@
   let currentData = { themes:[...DATA.themes], items:{} };
 
   async function bootstrap(){
+    setConn('warn','Inicializando…');
+
     if (FLOW.url && FLOW.url.startsWith("http")) {
       try{
         Provider = FlowProvider;
