@@ -234,64 +234,25 @@
   // - action     = triggerBody()?['action']
   // - themesJson = triggerBody()?['themesJson']
   // - rowsJson   = triggerBody()?['rowsJson']
+<script>
+  // ... mantenha o resto do seu código igual acima
+
+  // ✅ ENVIO CORRETO PARA O SEU "Run script"
   function packForFlow(action, themesArray, rowsArray){
     return {
-      action: action,
-      themesJson: JSON.stringify(themesArray || []),
-      rowsJson: JSON.stringify(rowsArray || [])
+      action: String(action || ""),                  // garante string
+      themesJson: JSON.stringify(themesArray || []), // manda STRING
+      rowsJson: JSON.stringify(rowsArray || [])      // manda STRING
     };
   }
 
-  // =========================
-  // 3) PROVIDERS
-  // =========================
-  const LocalProvider = {
-    async loadAll(){
-      const themes=this.getThemes();
-      const items={};
-      themes.forEach(t=>DATA.units.forEach(u=>{ items[keyFor(u,t)]=this.loadState(u,t); }));
-      return { themes, items };
-    },
-    getThemes(){
-      const raw=localStorage.getItem(THEMES_KEY);
-      if(raw){
-        try{ const a=JSON.parse(raw); if(Array.isArray(a)&&a.length) return a; }catch(e){}
-      }
-      return [...DATA.themes];
-    },
-    setThemes(a){ localStorage.setItem(THEMES_KEY, JSON.stringify(a)); },
-    loadState(u,t){
-      const raw=localStorage.getItem(keyFor(u,t));
-      if(!raw) return normalizeState(null);
-      try{ return normalizeState(JSON.parse(raw)); }catch(e){ return normalizeState(null); }
-    },
-    async save(u,t,o){ localStorage.setItem(keyFor(u,t), JSON.stringify(o)); },
-    async remove(u,t){ localStorage.removeItem(keyFor(u,t)); },
-    async resetAll(){
-      this.getThemes().forEach(t=>DATA.units.forEach(u=>localStorage.removeItem(keyFor(u,t))));
-      localStorage.removeItem(THEMES_KEY);
-    },
-    async addTheme(v){
-      const arr=this.getThemes();
-      if(!arr.includes(v)){ arr.push(v); this.setThemes(arr); }
-    },
-    async removeTheme(v){
-      const arr=this.getThemes().filter(x=>x!==v);
-      this.setThemes(arr);
-      DATA.units.forEach(u=>localStorage.removeItem(keyFor(u,v)));
-    }
-  };
-
   const FlowProvider = (function(){
     async function post(payload){
-      if(!FLOW.url || !FLOW.url.startsWith("http")) throw new Error("FLOW.url não definido");
-
       const res = await fetch(FLOW.url, {
         method: "POST",
         headers: { "Content-Type":"application/json" },
         body: JSON.stringify(payload)
       });
-
       const text = await res.text();
       let json = {};
       try { json = JSON.parse(text); } catch {}
@@ -300,13 +261,14 @@
     }
 
     async function loadAll(){
+      // ✅ action TEM que ser "load"
       const j = await post(packForFlow("load", [], []));
 
-      // Seu Office Script devolve STRING JSON.
-      // O Flow pode devolver isso em "result" (se você usar a saída do Run script).
-      // Aqui aceitamos ambos: {result:"..."} ou já parseado.
-      const raw = (typeof j === "string") ? j : (j.result || j.body || j);
+      // seu Flow devolve outputs('Run_script') como { result:"{...json...}" }
+      const raw = (j && j.result) ? j.result : j;
       const parsed = (typeof raw === "string") ? JSON.parse(raw) : raw;
+
+      if (!parsed || !parsed.ok) throw new Error(parsed?.error || "load falhou");
 
       const themesFinal = (Array.isArray(parsed.themes) && parsed.themes.length) ? parsed.themes : [...DATA.themes];
 
@@ -335,20 +297,29 @@
       return { themes: themesFinal, items };
     }
 
-    async function saveOneRow(themesArray, oneRowObj){
-      return await post(packForFlow("bulkUpsert", themesArray, [oneRowObj]));
-    }
-
     async function save(u,t,o){
       currentData.items[keyFor(u,t)] = normalizeState(o);
       const oneRow = toRow(u, t, currentData.items[keyFor(u,t)]);
-      return await saveOneRow(currentData.themes || [], oneRow);
+      // ✅ action TEM que ser "bulkUpsert"
+      const j = await post(packForFlow("bulkUpsert", currentData.themes || [], [oneRow]));
+
+      const raw = (j && j.result) ? j.result : j;
+      const parsed = (typeof raw === "string") ? JSON.parse(raw) : raw;
+      if (!parsed || !parsed.ok) throw new Error(parsed?.error || "bulkUpsert falhou");
+
+      return parsed;
     }
 
     async function remove(u,t){
       currentData.items[keyFor(u,t)] = normalizeState(null);
       const oneRow = toRow(u, t, currentData.items[keyFor(u,t)]);
-      return await saveOneRow(currentData.themes || [], oneRow);
+      const j = await post(packForFlow("bulkUpsert", currentData.themes || [], [oneRow]));
+
+      const raw = (j && j.result) ? j.result : j;
+      const parsed = (typeof raw === "string") ? JSON.parse(raw) : raw;
+      if (!parsed || !parsed.ok) throw new Error(parsed?.error || "bulkUpsert falhou");
+
+      return parsed;
     }
 
     async function bulkUpsertAll(data){
@@ -358,7 +329,14 @@
         const s = normalizeState(data.items[keyFor(unit, theme)]);
         rows.push(toRow(unit, theme, s));
       }));
-      return await post(packForFlow("bulkUpsert", themes, rows));
+
+      const j = await post(packForFlow("bulkUpsert", themes, rows));
+
+      const raw = (j && j.result) ? j.result : j;
+      const parsed = (typeof raw === "string") ? JSON.parse(raw) : raw;
+      if (!parsed || !parsed.ok) throw new Error(parsed?.error || "bulkUpsert falhou");
+
+      return parsed;
     }
 
     async function resetAll(){
@@ -371,18 +349,28 @@
       const arr = [...(currentData.themes||[])];
       if(!arr.includes(val)) arr.push(val);
       currentData.themes = arr;
-      DATA.units.forEach(u => currentData.items[keyFor(u,val)] = normalizeState(null));
-      return await post(packForFlow("bulkUpsert", currentData.themes, []));
+      // manda só atualização de temas (sem rows)
+      const j = await post(packForFlow("bulkUpsert", currentData.themes, []));
+      const raw = (j && j.result) ? j.result : j;
+      const parsed = (typeof raw === "string") ? JSON.parse(raw) : raw;
+      if (!parsed || !parsed.ok) throw new Error(parsed?.error || "bulkUpsert falhou");
+      return parsed;
     }
 
     async function removeTheme(val){
       currentData.themes = (currentData.themes||[]).filter(x => x !== val);
-      DATA.units.forEach(u => { delete currentData.items[keyFor(u,val)]; });
-      return await post(packForFlow("bulkUpsert", currentData.themes, []));
+      const j = await post(packForFlow("bulkUpsert", currentData.themes, []));
+      const raw = (j && j.result) ? j.result : j;
+      const parsed = (typeof raw === "string") ? JSON.parse(raw) : raw;
+      if (!parsed || !parsed.ok) throw new Error(parsed?.error || "bulkUpsert falhou");
+      return parsed;
     }
 
     return { loadAll, save, remove, resetAll, addTheme, removeTheme, bulkUpsertAll };
   })();
+
+  // ... mantenha o resto do seu HTML igual abaixo
+</script>
 
   // =========================
   // 4) APP
