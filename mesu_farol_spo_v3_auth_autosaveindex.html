@@ -272,99 +272,72 @@
   // ✅ FlowProvider (strings themesJson/rowsJson + normalização de Response)
   const FlowProvider = (function(){
     function packForFlow(action, themesArray, rowsArray){
-  const th = themesArray || [];
-  const rw = rowsArray || [];
   return {
-    // ✅ o que o Office Script precisa
-    action: String(action || "").trim(),
-    themesJson: JSON.stringify(th),
-    rowsJson: JSON.stringify(rw),
-
-    // ✅ compatibilidade caso seu Flow esteja usando arrays
-    themes: th,
-    rows: rw
+    action: action,
+    themesJson: JSON.stringify(themesArray || []),
+    rowsJson: JSON.stringify(rowsArray || [])
   };
 }
-
     async function post(payload){
-      if(!FLOW.url || !FLOW.url.startsWith("http")) throw new Error("FLOW.url não definido");
+  const res = await fetch(FLOW.url, {
+    method: "POST",
+    headers: { "Content-Type":"application/json" },
+    body: JSON.stringify(payload)
+  });
 
-      const res = await fetch(FLOW.url, {
-        method: "POST",
-        headers: { "Content-Type":"application/json" },
-        body: JSON.stringify(payload)
-      });
+  const raw = await res.text();
+  if (!res.ok) throw new Error(`Flow HTTP ${res.status}: ${raw}`);
 
-      const text = await res.text();
-      let json = null;
-      try { json = JSON.parse(text); } catch { json = { raw: text }; }
+  // o Response do Flow está mandando o Body do Run script (objeto com "result")
+  let outer = {};
+  try { outer = JSON.parse(raw); } catch { outer = { result: raw }; }
 
-      if (!res.ok) throw new Error(`Flow HTTP ${res.status}: ${text}`);
+  // se vier { result: "....json string...." }, parseia o result
+  if (outer && typeof outer.result === "string") {
+    try { return JSON.parse(outer.result); } catch { return { ok:false, error:"Resposta result não é JSON válido", raw: outer.result }; }
+  }
 
-      // Normaliza formatos comuns do Flow:
-      // 1) response = { body:{ result:"{...}" } }
-      // 2) response = { result:"{...}" }
-      // 3) response = "{...}"
-      let out = json;
-      if (out && out.body && out.body.result !== undefined) out = out.body.result;
-      if (out && out.result !== undefined) out = out.result;
-
-      if (typeof out === "string") {
-        try { out = JSON.parse(out); } catch { /* fica string */ }
-      }
-
-      return out;
-    }
+  // fallback
+  return outer;
+}
 
     async function loadAll(){
-      const out = await post(packForFlow("load", [], []));
+  const j = await post(packForFlow("load", [], []));
+  if (!j || j.ok === false) throw new Error(j?.error || "Falha no load");
 
-      // Se respondeu algo, consideramos online. Se ok:false, não cai offline.
-      const themesFinal = [...DATA.themes];
-      const items = {};
-      themesFinal.forEach(t => DATA.units.forEach(u => items[keyFor(u,t)] = normalizeState(null)));
+  const themesFinal = (Array.isArray(j.themes) && j.themes.length) ? j.themes : [...DATA.themes];
+  const items = {};
+  themesFinal.forEach(t => DATA.units.forEach(u => items[keyFor(u,t)] = normalizeState(null)));
 
-      if (!out || typeof out !== "object") {
-        return { themes: themesFinal, items, __warn: "Resposta inesperada do Flow" };
-      }
+  (j.rows || []).forEach(r => {
+    const theme = r["Tema"];
+    const unit  = r["Unidade"];
+    if(!theme || !unit) return;
 
-      if (out.ok === false) {
-        return { themes: themesFinal, items, __warn: out.error || "Script retornou ok:false" };
-      }
+    items[keyFor(unit, theme)] = normalizeState({
+      status: (r["Status (num)"]==="" || r["Status (num)"]==null) ? null : Number(r["Status (num)"]),
+      obs: r["Observações"] || "",
+      com: r["Comentários"] || "",
+      risco: r["Risco associado"] || "",
+      indicador: r["Indicador afetado"] || "",
+      acao: r["Ação necessária"] || "",
+      responsavel: r["Responsável"] || "",
+      dataLimite: r["Data limite"] || "",
+      decisao: r["Decisão de execução"] || "",
+      resumoExec: r["Resumo executivo"] || ""
+    });
+  });
 
-      const themes = (Array.isArray(out.themes) && out.themes.length) ? out.themes : themesFinal;
-      const items2 = {};
-      themes.forEach(t => DATA.units.forEach(u => items2[keyFor(u,t)] = normalizeState(null)));
-
-      (out.rows || []).forEach(r => {
-        const theme = r["Tema"];
-        const unit  = r["Unidade"];
-        if(!theme || !unit) return;
-
-        items2[keyFor(unit, theme)] = normalizeState({
-          status: (r["Status (num)"]==="" || r["Status (num)"]==null) ? null : Number(r["Status (num)"]),
-          obs: r["Observações"] || "",
-          com: r["Comentários"] || "",
-          risco: r["Risco associado"] || "",
-          indicador: r["Indicador afetado"] || "",
-          acao: r["Ação necessária"] || "",
-          responsavel: r["Responsável"] || "",
-          dataLimite: r["Data limite"] || "",
-          decisao: r["Decisão de execução"] || "",
-          resumoExec: r["Resumo executivo"] || ""
-        });
-      });
-
-      return { themes, items: items2 };
-    }
+  return { themes: themesFinal, items };
+}
 
     async function save(u,t,o){
-      currentData.items[keyFor(u,t)] = normalizeState(o);
-      const oneRow = toRow(u, t, currentData.items[keyFor(u,t)]);
-      const out = await post(packForFlow("bulkUpsert", currentData.themes || [], [oneRow]));
-      if (out && out.ok === false) throw new Error(out.error || "bulkUpsert ok:false");
-      return out;
-    }
+  currentData.items[keyFor(u,t)] = normalizeState(o);
+  const oneRow = toRow(u, t, currentData.items[keyFor(u,t)]);
+  const j = await post(packForFlow("bulkUpsert", currentData.themes || [], [oneRow]));
+  if (!j || j.ok === false) throw new Error(j?.error || "Falha no bulkUpsert");
+  return j;
+}
 
     async function remove(u,t){
       currentData.items[keyFor(u,t)] = normalizeState(null);
