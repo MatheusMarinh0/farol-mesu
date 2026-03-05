@@ -272,12 +272,19 @@
   // ✅ FlowProvider (strings themesJson/rowsJson + normalização de Response)
   const FlowProvider = (function(){
     function packForFlow(action, themesArray, rowsArray){
-      return {
-        action: String(action || ""),
-        themesJson: JSON.stringify(themesArray || []),
-        rowsJson: JSON.stringify(rowsArray || [])
-      };
-    }
+  const th = themesArray || [];
+  const rw = rowsArray || [];
+  return {
+    // ✅ o que o Office Script precisa
+    action: String(action || "").trim(),
+    themesJson: JSON.stringify(th),
+    rowsJson: JSON.stringify(rw),
+
+    // ✅ compatibilidade caso seu Flow esteja usando arrays
+    themes: th,
+    rows: rw
+  };
+}
 
     async function post(payload){
       if(!FLOW.url || !FLOW.url.startsWith("http")) throw new Error("FLOW.url não definido");
