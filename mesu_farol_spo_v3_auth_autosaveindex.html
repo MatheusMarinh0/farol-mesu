@@ -91,7 +91,7 @@
 
   <div class="small" style="margin-top:10px">
     Dica: se der erro, abra o <b>Run history</b> do Flow e veja se chegou <code class="k">action</code>,
-    <code class="k">themes</code> e <code class="k">rows</code>.
+    <code class="k">themesJson</code> e <code class="k">rowsJson</code>.
   </div>
 </div>
 
@@ -229,72 +229,30 @@
     };
   }
 
-  // ✅ compatível com o seu Power Automate:
-  // Run script recebe:
-  // - action        = triggerBody()?['action']
-  // - themesJson    = string(triggerBody()?['themes'])
-  // - rowsJson      = string(triggerBody()?['rows'])
+  // ✅ IMPORTANTE:
+  // Seu Office Script espera: action (string), themesJson (string JSON), rowsJson (string JSON)
+  // Então o HTML DEVE ENVIAR themesJson e rowsJson (strings), não arrays.
   function packForFlow(action, themesArray, rowsArray){
-    return { action, themes: themesArray || [], rows: rowsArray || [] };
+    return {
+      action,
+      themesJson: JSON.stringify(themesArray || []),
+      rowsJson: JSON.stringify(rowsArray || [])
+    };
   }
 
-  function tryParseJson(text){
-    if (typeof text !== "string") return null;
-    const t = text.trim();
-    if (!t) return null;
-    try { return JSON.parse(t); } catch { return null; }
-  }
-
-  function unwrapFlowResponse(obj){
-    // casos comuns:
-    // 1) Response = body('Run_script') -> pode vir { result: "..." } ou { body: { result:"" } }
-    // 2) Response = outputs('Run_script') -> vem objeto gigante com .body.result
-    // 3) Response = "...." (string JSON)
-    if (obj == null) return {};
-
-    // se vier string (JSON), tenta parse
-    if (typeof obj === "string") {
-      const parsed = tryParseJson(obj);
-      return parsed != null ? unwrapFlowResponse(parsed) : {};
-    }
-
-    // se vier com .body
-    if (obj.body !== undefined) {
-      // body pode ser string JSON, objeto, ou conter {result:"..."}
-      if (typeof obj.body === "string") {
-        const p = tryParseJson(obj.body);
-        return p != null ? unwrapFlowResponse(p) : {};
+  function parseMaybeDoubleJson(text){
+    // 1) tenta parse normal
+    try{
+      const j1 = JSON.parse(text);
+      // 2) se veio uma string que parece JSON, parse de novo
+      if (typeof j1 === "string" && j1.trim().startsWith("{")) {
+        try { return JSON.parse(j1); } catch { return j1; }
       }
-      if (obj.body && typeof obj.body === "object") return unwrapFlowResponse(obj.body);
+      return j1;
+    }catch{
+      // 3) se não é JSON, devolve texto
+      return text;
     }
-
-    // se vier com .result (Excel Run script)
-    if (obj.result !== undefined) {
-      if (typeof obj.result === "string") {
-        const p = tryParseJson(obj.result);
-        return p != null ? p : {};
-      }
-      if (obj.result && typeof obj.result === "object") return obj.result;
-    }
-
-    // se vier do seu script (string JSON no retorno), pode aparecer como { ok:true, ... } já
-    return obj;
-  }
-
-  function parsePossiblyStringArray(v){
-    if (Array.isArray(v)) return v;
-    if (typeof v === "string" && v.trim()){
-      try{ const j = JSON.parse(v); return Array.isArray(j) ? j : []; }catch{ return []; }
-    }
-    return [];
-  }
-
-  function parsePossiblyStringRows(v){
-    if (Array.isArray(v)) return v;
-    if (typeof v === "string" && v.trim()){
-      try{ const j = JSON.parse(v); return Array.isArray(j) ? j : []; }catch{ return []; }
-    }
-    return [];
   }
 
   // =========================
@@ -348,37 +306,31 @@
       });
 
       const text = await res.text();
-      let parsed = {};
-      try { parsed = JSON.parse(text); } catch { parsed = text; }
+      const parsed = parseMaybeDoubleJson(text);
 
-      if (!res.ok) throw new Error(`Flow HTTP ${res.status}: ${text}`);
+      if (!res.ok) {
+        throw new Error(`Flow HTTP ${res.status}: ${text}`);
+      }
 
-      return unwrapFlowResponse(parsed);
+      // seu Office Script retorna STRING JSON, e o Response pode devolver como string pura
+      // parsed deve virar objeto {ok:true,...}
+      if (typeof parsed === "string") {
+        // se ainda veio string, tenta JSON.parse nela
+        try { return JSON.parse(parsed); } catch { return { ok:false, error: parsed }; }
+      }
+      return parsed || {};
     }
 
     async function loadAll(){
       const j = await post(packForFlow("load", [], []));
 
-      // aceita 2 formatos:
-      // A) { ok:true, themes:[...], rows:[{...},{...}] }
-      // B) { ok:true, themes:"[...]", rows:"[...]" }
-      // C) { ok:true, themesJson:"[...]", rowsJson:"[...]" }
-      const themes =
-        (Array.isArray(j.themes) && j.themes.length) ? j.themes :
-        (typeof j.themes === "string" ? parsePossiblyStringArray(j.themes) : []) ||
-        parsePossiblyStringArray(j.themesJson);
-
-      const rows =
-        (Array.isArray(j.rows) && j.rows.length) ? j.rows :
-        (typeof j.rows === "string" ? parsePossiblyStringRows(j.rows) : []) ||
-        parsePossiblyStringRows(j.rowsJson);
-
-      const themesFinal = (themes && themes.length) ? themes : [...DATA.themes];
+      const themesFinal = (Array.isArray(j.themes) && j.themes.length) ? j.themes : [...DATA.themes];
 
       const items = {};
       themesFinal.forEach(t => DATA.units.forEach(u => items[keyFor(u,t)] = normalizeState(null)));
 
-      (rows || []).forEach(r => {
+      const rows = Array.isArray(j.rows) ? j.rows : [];
+      rows.forEach(r => {
         const theme = r["Tema"];
         const unit  = r["Unidade"];
         if(!theme || !unit) return;
@@ -400,7 +352,6 @@
       return { themes: themesFinal, items };
     }
 
-    // ✅ salva 1 célula (1 row) por vez
     async function saveOneRow(themesArray, oneRowObj){
       return await post(packForFlow("bulkUpsert", themesArray, [oneRowObj]));
     }
@@ -438,6 +389,8 @@
       if(!arr.includes(val)) arr.push(val);
       currentData.themes = arr;
       DATA.units.forEach(u => currentData.items[keyFor(u,val)] = normalizeState(null));
+
+      // atualiza temas (rows pode ser vazio; o script atualiza temas se themes.length > 0)
       return await post(packForFlow("bulkUpsert", currentData.themes, []));
     }
 
